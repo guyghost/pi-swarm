@@ -7,6 +7,7 @@
  *   - Active agent tracking across turns (persisted in session)
  *   - Agent persona injection into system prompt via before_agent_start
  *   - Footer status showing current agent + workflow step
+ *   - flow_complete tool — agent calls it to auto-advance to next step
  *   - /agent <name|status|reset> command
  *   - /flow <standard|ui|tdd|review|status> command
  *   - /flow-next to advance workflow step
@@ -25,6 +26,7 @@
  */
 
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
+import { Type } from "@sinclair/typebox";
 import { appendFileSync, mkdirSync, existsSync } from "node:fs";
 import { join, dirname } from "node:path";
 
@@ -236,23 +238,108 @@ export default function (pi: ExtensionAPI) {
 		const workflowInfo =
 			state.workflow && state.workflow in WORKFLOWS
 				? (() => {
-						const steps = WORKFLOWS[state.workflow];
+						const steps = WORKFLOWS[state.workflow!];
 						const stepNum = state.workflowStep + 1;
 						const total = steps.length;
 						const next = steps[state.workflowStep + 1];
-						const nextHint = next
-							? `\nNext step: use \`/flow-next\` to advance to @${next} when your work is complete.`
-							: `\nThis is the final step. Use \`/flow-next\` to complete the workflow.`;
-						return `\n\n**Workflow**: ${state.workflow} — Step ${stepNum}/${total}${nextHint}`;
+						const completionHint = next
+							? `\nWhen your work is complete, call the \`flow_complete\` tool to automatically hand off to @${next}.`
+							: `\nThis is the final step. Call \`flow_complete\` to complete the workflow.`;
+						return `\n\n**Workflow**: ${state.workflow} \u2014 Step ${stepNum}/${total}${completionHint}`;
 					})()
 				: "";
 
-		const injection = `\n\n---\n## Active Agent: ${role.emoji} ${role.label}\n\nYou are currently acting as the **${role.label}** agent in the OpenSpec multi-agent pipeline. Stay in character — follow the responsibilities and constraints of this role.${workflowInfo}\n\nTo switch agents: \`/skill:<agent>\` or \`/agent <name>\`\n---`;
+		const injection = `\n\n---\n## Active Agent: ${role.emoji} ${role.label}\n\nYou are currently acting as the **${role.label}** agent in the OpenSpec multi-agent pipeline. Stay in character \u2014 follow the responsibilities and constraints of this role.${workflowInfo}\n\nTo switch agents: \`/skill:<agent>\` or \`/agent <name>\`\n---`;
 
 		return {
 			systemPrompt: event.systemPrompt + injection,
 		};
 	});
+
+	// ── flow_complete tool ────────────────────────────────────────────────────
+
+	pi.registerTool({
+		name: "flow_complete",
+		label: "Flow Complete",
+		description: "Signal that the current agent has finished its work. Automatically advances to the next workflow step and loads the next agent persona. Call this when your deliverables for this step are done.",
+		promptSnippet: "Signal step completion and auto-advance to the next agent in the workflow",
+		parameters: Type.Object({
+			notes: Type.Optional(Type.String({ description: "Optional handoff notes for the next agent" })),
+		}),
+		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+			if (!state.workflow) {
+				return {
+					content: [{ type: "text" as const, text: "No active workflow. Start one with /flow <standard|ui|tdd|review>." }],
+					details: { advanced: false },
+				};
+			}
+
+			const steps = WORKFLOWS[state.workflow];
+			const stepDurationMs = state.stepStartedAt
+				? Date.now() - new Date(state.stepStartedAt).getTime()
+				: null;
+
+			// Workflow complete
+			if (state.workflowStep >= steps.length - 1) {
+				logContextEntry(ctx, "workflow_complete", {
+					workflow: state.workflow,
+					stepDurationMs,
+					totalCorrectionCycles: state.correctionCycle,
+					notes: params.notes,
+				});
+				const completedWorkflow = state.workflow;
+				state.workflow = null;
+				state.workflowStep = 0;
+				state.correctionCycle = 0;
+				state.stepStartedAt = null;
+				saveState();
+				updateStatus(ctx);
+				updateWidget(ctx);
+				return {
+					content: [{ type: "text" as const, text: `\ud83c\udf89 ${completedWorkflow.toUpperCase()} workflow complete! All agents have finished.${params.notes ? `\n\nFinal notes: ${params.notes}` : ""}` }],
+					details: { advanced: true, complete: true, workflow: completedWorkflow },
+				};
+			}
+
+			// Advance to next step
+			const prevAgent = steps[state.workflowStep];
+			const prevCorrectionCycle = state.correctionCycle;
+			state.workflowStep++;
+			const nextAgent = steps[state.workflowStep];
+			state.correctionCycle = 0;
+			state.stepStartedAt = new Date().toISOString();
+
+			activateAgent(nextAgent, ctx);
+			saveState();
+
+			logContextEntry(ctx, "workflow_step", {
+				workflow: state.workflow,
+				step: state.workflowStep,
+				agent: nextAgent,
+				prev: prevAgent,
+				stepDurationMs,
+				correctionCycles: prevCorrectionCycle,
+				notes: params.notes,
+			});
+
+			const remaining = steps.length - state.workflowStep - 1;
+			const remainingStr = remaining > 0
+				? `Remaining: ${steps.slice(state.workflowStep + 1).map((s) => `@${s}`).join(" \u2192 ")}`
+				: "(last step)";
+
+			const handoff = params.notes ? `\n\nHandoff notes: ${params.notes}` : "";
+			const result = `\u2705 @${prevAgent} done \u2192 Step ${state.workflowStep + 1}/${steps.length}: ${AGENT_ROLES[nextAgent].emoji} @${nextAgent}\n${remainingStr}${handoff}`;
+
+			// Auto-load next persona
+			pi.sendUserMessage(`/skill:${nextAgent}`, { deliverAs: "followUp" });
+			
+			return {
+				content: [{ type: "text" as const, text: result }],
+				details: { advanced: true, complete: false, from: prevAgent, to: nextAgent, step: state.workflowStep },
+			};
+		},
+	});
+
 
 	// ── Input Interception ────────────────────────────────────────────────────
 
