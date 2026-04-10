@@ -1127,7 +1127,6 @@ export default function (pi: ExtensionAPI) {
 		const snapCycle    = state.correctionCycle;
 		const snapAction   = _currentAction;
 		const snapWorking  = _isWorking;
-		const role         = AGENT_ROLES[snapAgent];
 
 		const DOT_COLS = 12;
 
@@ -1145,36 +1144,70 @@ export default function (pi: ExtensionAPI) {
 						const lines: string[] = [];
 
 						const hasWorkflow = !!(snapWorkflow && snapWorkflow in WORKFLOWS);
-						const steps       = hasWorkflow ? WORKFLOWS[snapWorkflow!] : [];
-						const total       = steps.length;
-						const dotRow      = makeDotRow(snapStep + 1, total);
-						// visible width of one dot row + 2 trailing spaces
-						const dotRowVW    = DOT_COLS + 2;
 
-						// ── Line 1: activity + emoji + name (left)  |  step (right) ──
-						const actDot  = snapWorking ? t.fg("accent", "●") : t.fg("dim", "○");
-						const l1Left  = `  ` + actDot + `  ` + t.fg(role.color, t.bold(`${role.emoji}  ${role.label.toUpperCase()}`));
-						const stepStr = hasWorkflow ? (snapStep + 1).toString().padStart(2, "0") : "";
-						const l1Right = stepStr
-							? t.fg("muted", stepStr) + (snapCycle > 0 ? t.fg("warning", ` ×${snapCycle}`) : ``) + `  `
-							: ``;
-
-						const l1Pad = Math.max(1, width - visibleWidth(l1Left) - visibleWidth(l1Right));
-						lines.push(truncateToWidth(l1Left + " ".repeat(l1Pad) + l1Right, width));
-
-						if (hasWorkflow) {
-							// ── Line 2: └ action (left)  |  dot row 1 (right) ──────────
-							const actionLabel = snapAction ?? AGENT_BLURBS[snapAgent];
-							const l2Left      = t.fg("dim", "  └ ") + t.fg("muted", actionLabel);
-							const dotStartCol = width - dotRowVW;
-							const l2Pad       = Math.max(1, dotStartCol - visibleWidth(l2Left));
-							lines.push(truncateToWidth(l2Left + " ".repeat(l2Pad) + dotRow + `  `, width));
-
-							// ── Line 3: (empty)           |  dot row 2 (right) ──────────
-							lines.push(" ".repeat(Math.max(0, dotStartCol)) + dotRow + `  `);
-						} else {
-							// No workflow — just the blurb on line 2
+						// ── No workflow: minimal 2-line badge ────────────────────────
+						if (!hasWorkflow) {
+							const role   = AGENT_ROLES[snapAgent];
+							const actDot = snapWorking ? t.fg("accent", "●") : t.fg("dim", "○");
+							lines.push(truncateToWidth(
+								`  ` + actDot + `  ` + t.fg(role.color, t.bold(`${role.emoji}  ${role.label.toUpperCase()}`)),
+								width,
+							));
 							lines.push(t.fg("dim", "  └ ") + t.fg("dim", AGENT_BLURBS[snapAgent]));
+							return lines;
+						}
+
+						// ── Full pipeline tree ───────────────────────────────────────
+						const steps    = WORKFLOWS[snapWorkflow!];
+						const total    = steps.length;
+						const dotRow   = makeDotRow(snapStep + 1, total);
+						const dotRowVW = DOT_COLS + 2; // dots + 2 trailing spaces
+
+						for (let i = 0; i < steps.length; i++) {
+							const stepName = steps[i];
+							const stepRole = AGENT_ROLES[stepName];
+							const stepNum  = (i + 1).toString().padStart(2, "0");
+							const isActive = i === snapStep;
+							const isDone   = i < snapStep;
+							const isNext   = i === snapStep + 1;
+
+							if (isDone) {
+								// ── Completed: single dim line with ✓ ───────────────────
+								const l = `  ` + t.fg("success", `✓`) + `  ` +
+									t.fg("dim", `${stepRole.emoji}  ${stepRole.label.toUpperCase()}`);
+								const r = t.fg("dim", stepNum) + `  `;
+								const pad = Math.max(1, width - visibleWidth(l) - visibleWidth(r));
+								lines.push(truncateToWidth(l + " ".repeat(pad) + r, width));
+
+							} else if (isActive) {
+								// ── Active: 3-line card with dot grid ───────────────────
+								const actDot  = snapWorking ? t.fg("accent", "●") : t.fg("dim", "○");
+								const l1Left  = `  ` + actDot + `  ` +
+									t.fg(stepRole.color, t.bold(`${stepRole.emoji}  ${stepRole.label.toUpperCase()}`));
+								const l1Right = t.fg("muted", stepNum) +
+									(snapCycle > 0 ? t.fg("warning", ` ×${snapCycle}`) : ``) + `  `;
+								const l1Pad   = Math.max(1, width - visibleWidth(l1Left) - visibleWidth(l1Right));
+								lines.push(truncateToWidth(l1Left + " ".repeat(l1Pad) + l1Right, width));
+
+								const actionLabel = snapAction ?? AGENT_BLURBS[stepName];
+								const l2Left      = t.fg("dim", "  └ ") + t.fg("muted", actionLabel);
+								const dotStartCol = width - dotRowVW;
+								const l2Pad       = Math.max(1, dotStartCol - visibleWidth(l2Left));
+								lines.push(truncateToWidth(l2Left + " ".repeat(l2Pad) + dotRow + `  `, width));
+								lines.push(" ".repeat(Math.max(0, dotStartCol)) + dotRow + `  `);
+
+							} else if (isNext) {
+								// ── Next: muted single line with › marker ───────────────
+								const l = `  ›  ` +
+									t.fg("muted", `${stepRole.emoji}  ${stepRole.label.toUpperCase()}`);
+								lines.push(truncateToWidth(l, width));
+
+							} else {
+								// ── Queued: dim single line with · marker ───────────────
+								const l = `  ·  ` +
+									t.fg("dim", `${stepRole.emoji}  ${stepRole.label}`);
+								lines.push(truncateToWidth(l, width));
+							}
 						}
 
 						return lines;
