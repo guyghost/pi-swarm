@@ -4,8 +4,8 @@
 context-log.jsonl
 .pi/
 
-# Ralph loops (état interne de développement)
-.ralph/
+# Marshal loops (état interne de développement)
+.marshal/
 
 # Node
 node_modules/

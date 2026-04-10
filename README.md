@@ -112,18 +112,8 @@ Pipeline: `validator → review`
 /swarm theme kimi      # Thème Kimi cards
 /swarm theme blueprint # Thème blueprint
 /swarm theme minimal   # Thème minimal
-/swarm theme hangar    # Thème V3 cartes suspendues
+/swarm theme hangar    # Thème cartes suspendues
 /swarm help            # Aide dashboard
-
-# V2: command theatre
-# - cartes agents en grille
-# - progression workflow visuelle
-# - timeline des transitions récentes
-
-# V3: hanging cards
-# - barre Create Subagent
-# - cartes suspendues des agents
-# - style Kimi en console
 ```
 
 ### Gérer les workflows

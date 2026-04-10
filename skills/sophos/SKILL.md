@@ -4,7 +4,7 @@ description: Second avis indépendant et avocat du diable. Remet en question les
 license: MIT
 metadata:
   author: openspec
-  version: "1.0.0"
+  version: "1.1.0"
 ---
 
 # Sophos Agent

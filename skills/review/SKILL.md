@@ -4,7 +4,7 @@ description: Verdict final sur le code produit par le pipeline multi-agent. Éme
 license: MIT
 metadata:
   author: openspec
-  version: "1.0.0"
+  version: "1.1.0"
 ---
 
 # Review Agent

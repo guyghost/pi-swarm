@@ -166,9 +166,9 @@ const SWARM_THEMES: Record<SwarmTheme, ThemeTokens> = {
 
 const SWARM_THEME_NAMES = Object.keys(SWARM_THEMES) as SwarmTheme[];
 
-// ─── Ralph Loop ─────────────────────────────────────────────────────────────
+// ─── Marshal Loop ─────────────────────────────────────────────────────────────
 
-interface RalphLoop {
+interface MarshalLoop {
 	name: string;
 	iteration: number;
 	maxIterations: number;
@@ -198,8 +198,8 @@ interface AgentState {
 	autoPersona: boolean;
 	// Step timing
 	stepStartedAt: string | null;
-	// Ralph loop
-	ralphLoop: RalphLoop | null;
+	// Marshal loop
+	marshalLoop: MarshalLoop | null;
 }
 
 const CUSTOM_TYPE = "openspec-agent-state";
@@ -216,14 +216,14 @@ export default function (pi: ExtensionAPI) {
 		correctionCycle: 0,
 		autoPersona: true,
 		stepStartedAt: null,
-		ralphLoop: null,
+		marshalLoop: null,
 	};
 
 	// ── Session State ──────────────────────────────────────────────────────────
 
 	// Restore state from session entries on startup or session switch
 	pi.on("session_start", async (_event, ctx) => {
-		state = { current: null, history: [], workflow: null, workflowStep: 0, theme: "kimi", correctionCycle: 0, autoPersona: true, stepStartedAt: null, ralphLoop: null };
+		state = { current: null, history: [], workflow: null, workflowStep: 0, theme: "kimi", correctionCycle: 0, autoPersona: true, stepStartedAt: null, marshalLoop: null };
 
 		for (const entry of ctx.sessionManager.getBranch()) {
 			if (entry.type === "custom" && entry.customType === CUSTOM_TYPE && entry.data) {
@@ -236,7 +236,7 @@ export default function (pi: ExtensionAPI) {
 		if (state.correctionCycle === undefined) state.correctionCycle = 0;
 		if (state.autoPersona === undefined) state.autoPersona = true;
 		if (state.stepStartedAt === undefined) state.stepStartedAt = null;
-		if (state.ralphLoop === undefined) state.ralphLoop = null;
+		if (state.marshalLoop === undefined) state.marshalLoop = null;
 		state.theme = normalizeTheme(state.theme);
 
 		updateStatus(ctx);
@@ -357,12 +357,12 @@ export default function (pi: ExtensionAPI) {
 	});
 
 
-	// ── Ralph Tools ─────────────────────────────────────────────────────────────────
+	// ── Marshal Tools ─────────────────────────────────────────────────────────────────
 
 	pi.registerTool({
-		name: "ralph_start",
-		label: "Ralph Start",
-		description: "Start a long-running iterative development loop. Creates .ralph/<name>.md with the task content and begins the first iteration.",
+		name: "marshal_start",
+		label: "Marshal Start",
+		description: "Start a long-running iterative development loop. Creates .marshal/<name>.md with the task content and begins the first iteration.",
 		promptSnippet: "Start an iterative loop with a task checklist and max iterations",
 		parameters: Type.Object({
 			name: Type.String({ description: "Loop name, e.g. 'refactor-auth'" }),
@@ -372,11 +372,11 @@ export default function (pi: ExtensionAPI) {
 			reflectEvery: Type.Optional(Type.Number({ description: "Insert a reflection checkpoint every N iterations" })),
 		}),
 		async execute(_id, params, _signal, _onUpdate, ctx) {
-			const taskFile = join(ctx.cwd, ".ralph", `${params.name}.md`);
+			const taskFile = join(ctx.cwd, .".marshal", `${params.name}.md`);
 			mkdirSync(dirname(taskFile), { recursive: true });
 			writeFileSync(taskFile, params.taskContent, "utf-8");
 
-			const loop: RalphLoop = {
+			const loop: MarshalLoop = {
 				name: params.name,
 				iteration: 0,
 				maxIterations: params.maxIterations ?? 50,
@@ -385,29 +385,29 @@ export default function (pi: ExtensionAPI) {
 				status: "running",
 				startedAt: new Date().toISOString(),
 			};
-			state.ralphLoop = loop;
+			state.marshalLoop = loop;
 			saveState();
 
-			pi.sendUserMessage(buildRalphPrompt(loop, params.taskContent), { deliverAs: "followUp" });
+			pi.sendUserMessage(buildMarshalPrompt(loop, params.taskContent), { deliverAs: "followUp" });
 
 			return {
-				content: [{ type: "text" as const, text: `Started loop "${params.name}" (max ${loop.maxIterations} iterations).\nTask: .ralph/${params.name}.md` }],
+				content: [{ type: "text" as const, text: `Started loop "${params.name}" (max ${loop.maxIterations} iterations).\nTask: .marshal/${params.name}.md` }],
 				details: { name: params.name, maxIterations: loop.maxIterations },
 			};
 		},
 	});
 
 	pi.registerTool({
-		name: "ralph_done",
-		label: "Ralph Done",
-		description: "Signal the end of the current Ralph loop iteration. Reads the updated task file and queues the next iteration. Do NOT call if you output <promise>COMPLETE</promise>.",
-		promptSnippet: "Advance to the next Ralph loop iteration",
+		name: "marshal_done",
+		label: "Marshal Done",
+		description: "Signal the end of the current Marshal loop iteration. Reads the updated task file and queues the next iteration. Do NOT call if you output <promise>COMPLETE</promise>.",
+		promptSnippet: "Advance to the next Marshal loop iteration",
 		parameters: Type.Object({}),
 		async execute(_id, _params, _signal, _onUpdate, ctx) {
-			const loop = state.ralphLoop;
+			const loop = state.marshalLoop;
 			if (!loop || loop.status !== "running") {
 				return {
-					content: [{ type: "text" as const, text: "No active Ralph loop." }],
+					content: [{ type: "text" as const, text: "No active Marshal loop." }],
 					details: {},
 				};
 			}
@@ -417,7 +417,7 @@ export default function (pi: ExtensionAPI) {
 			if (loop.iteration >= loop.maxIterations) {
 				loop.status = "complete";
 				saveState();
-				if (ctx.hasUI) ctx.ui.notify(`⚠️ Ralph loop "${loop.name}" reached max iterations (${loop.maxIterations}).`, "warning");
+				if (ctx.hasUI) ctx.ui.notify(`⚠️ Marshal loop "${loop.name}" reached max iterations (${loop.maxIterations}).`, "warning");
 				return {
 					content: [{ type: "text" as const, text: `Max iterations (${loop.maxIterations}) reached. Loop stopped.` }],
 					details: { stopped: true, reason: "max_iterations" },
@@ -425,12 +425,12 @@ export default function (pi: ExtensionAPI) {
 			}
 
 			// Read updated task file (agent may have edited it this iteration)
-			const taskFile = join(ctx.cwd, ".ralph", `${loop.name}.md`);
+			const taskFile = join(ctx.cwd, .".marshal", `${loop.name}.md`);
 			let taskContent = "(task file not found)";
 			try { taskContent = readFileSync(taskFile, "utf-8"); } catch { /* ok */ }
 
 			saveState();
-			pi.sendUserMessage(buildRalphPrompt(loop, taskContent), { deliverAs: "followUp" });
+			pi.sendUserMessage(buildMarshalPrompt(loop, taskContent), { deliverAs: "followUp" });
 
 			return {
 				content: [{ type: "text" as const, text: `Iteration ${loop.iteration + 1}/${loop.maxIterations} queued.` }],
@@ -441,7 +441,7 @@ export default function (pi: ExtensionAPI) {
 
 	// Detect <promise>COMPLETE</promise> in assistant messages to close the loop
 	pi.on("message_end", async (event, ctx) => {
-		const loop = state.ralphLoop;
+		const loop = state.marshalLoop;
 		if (!loop || loop.status !== "running") return;
 
 		const msg = event.message;
@@ -457,7 +457,7 @@ export default function (pi: ExtensionAPI) {
 			loop.status = "complete";
 			saveState();
 			if (ctx.hasUI) {
-				ctx.ui.notify(`✅ Ralph loop "${loop.name}" complete after ${loop.iteration + 1} iteration${loop.iteration !== 0 ? "s" : ""}!`, "success");
+				ctx.ui.notify(`✅ Marshal loop "${loop.name}" complete after ${loop.iteration + 1} iteration${loop.iteration !== 0 ? "s" : ""}!`, "info");
 			}
 		}
 	});
@@ -518,7 +518,7 @@ export default function (pi: ExtensionAPI) {
 			if (isAgentName(cmd)) {
 				activateAgent(cmd, ctx);
 				const role = AGENT_ROLES[cmd];
-				ctx.ui.notify(`Switched to ${role.emoji} ${role.label}\n\nLoad persona: /skill:${cmd}`, "success");
+				ctx.ui.notify(`Switched to ${role.emoji} ${role.label}\n\nLoad persona: /skill:${cmd}`, "info");
 			} else {
 				ctx.ui.notify(
 					`Unknown agent: "${cmd}"\nAvailable: ${AGENT_NAMES.join(", ")}\n\nUsage: /agent <name|status|reset|list>`,
@@ -746,7 +746,7 @@ export default function (pi: ExtensionAPI) {
 			ctx.ui.notify(
 				`🚀 ${cmd.toUpperCase()} workflow started!\n\nPipeline:\n${stepsStr}\n\nCurrent: ${AGENT_ROLES[firstAgent].emoji} @${firstAgent}\n\n` +
 				(state.autoPersona ? `Loading persona...` : `Load persona: /skill:${firstAgent}\nAdvance: /flow-next`),
-				"success",
+				"info",
 			);
 
 			logContextEntry(ctx, "workflow_start", { workflow: cmd, steps });
@@ -789,7 +789,7 @@ export default function (pi: ExtensionAPI) {
 				saveState();
 				updateStatus(ctx);
 				updateWidget(ctx);
-				ctx.ui.notify(`🎉 ${completedWorkflow.toUpperCase()} workflow complete!\n\nAll agents have finished.`, "success");
+				ctx.ui.notify(`🎉 ${completedWorkflow.toUpperCase()} workflow complete!\n\nAll agents have finished.`, "info");
 				return;
 			}
 
@@ -896,7 +896,7 @@ export default function (pi: ExtensionAPI) {
 
 				state.theme = value;
 				saveState();
-				ctx.ui.notify(`Theme switched to ${value} (${SWARM_THEMES[value].label})`, "success");
+				ctx.ui.notify(`Theme switched to ${value} (${SWARM_THEMES[value].label})`, "info");
 				showSwarmDashboard(ctx);
 				return;
 			}
@@ -906,29 +906,29 @@ export default function (pi: ExtensionAPI) {
 	});
 
 	/**
-	 * /ralph <status|stop|resume>
-	 * Manage Ralph loops
+	 * /marshal <status|stop|resume>
+	 * Manage Marshal loops
 	 */
-	pi.registerCommand("ralph", {
-		description: "Manage Ralph loops: /ralph <status|stop|resume [name]>",
+	pi.registerCommand("marshal", {
+		description: "Manage Marshal loops: /marshal <status|stop|resume [name]>",
 		handler: async (args, ctx) => {
 			const [cmd, ...rest] = args.trim().split(/\s+/);
 			const value = rest.join(" ");
 
 			if (!cmd || cmd === "status") {
-				const loop = state.ralphLoop;
+				const loop = state.marshalLoop;
 				if (!loop) {
-					ctx.ui.notify("No active Ralph loop.\n\nStart via: ralph_start tool", "info");
+					ctx.ui.notify("No active Marshal loop.\n\nStart via: marshal_start tool", "info");
 				} else {
 					const elapsed = Math.round((Date.now() - new Date(loop.startedAt).getTime()) / 1000);
 					ctx.ui.notify(
 						[
-							`Ralph loop: "${loop.name}"`,
+							`Marshal loop: "${loop.name}"`,
 							`Status    : ${loop.status}`,
 							`Iteration : ${loop.iteration + 1}/${loop.maxIterations}`,
 							`Items/turn: ${loop.itemsPerIteration || "unlimited"}`,
 							`Elapsed   : ${elapsed}s`,
-							`Task file : .ralph/${loop.name}.md`,
+							`Task file : .marshal/${loop.name}.md`,
 						].join("\n"),
 						"info",
 					);
@@ -937,65 +937,65 @@ export default function (pi: ExtensionAPI) {
 			}
 
 			if (cmd === "stop") {
-				if (!state.ralphLoop) { ctx.ui.notify("No active Ralph loop.", "error"); return; }
-				state.ralphLoop.status = "paused";
+				if (!state.marshalLoop) { ctx.ui.notify("No active Marshal loop.", "error"); return; }
+				state.marshalLoop.status = "paused";
 				saveState();
-				ctx.ui.notify(`Paused loop "${state.ralphLoop.name}" at iteration ${state.ralphLoop.iteration + 1}.`, "info");
+				ctx.ui.notify(`Paused loop "${state.marshalLoop.name}" at iteration ${state.marshalLoop.iteration + 1}.`, "info");
 				return;
 			}
 
 			if (cmd === "resume") {
-				const loop = state.ralphLoop;
+				const loop = state.marshalLoop;
 				if (!loop) { ctx.ui.notify("No loop to resume in this session.", "error"); return; }
 				if (value && loop.name !== value) {
 					ctx.ui.notify(`Loop "${value}" not found. Current: "${loop.name}".`, "error"); return;
 				}
 				loop.status = "running";
 				saveState();
-				const taskFile = join(ctx.cwd, ".ralph", `${loop.name}.md`);
+				const taskFile = join(ctx.cwd, .".marshal", `${loop.name}.md`);
 				let taskContent = "(task file not found)";
 				try { taskContent = readFileSync(taskFile, "utf-8"); } catch { /* ok */ }
-				pi.sendUserMessage(buildRalphPrompt(loop, taskContent), { deliverAs: "followUp" });
-				ctx.ui.notify(`Resumed loop "${loop.name}" at iteration ${loop.iteration + 1}.`, "success");
+				pi.sendUserMessage(buildMarshalPrompt(loop, taskContent), { deliverAs: "followUp" });
+				ctx.ui.notify(`Resumed loop "${loop.name}" at iteration ${loop.iteration + 1}.`, "info");
 				return;
 			}
 
-			ctx.ui.notify(`Unknown: "${cmd}"\nUsage: /ralph <status|stop|resume>`, "error");
+			ctx.ui.notify(`Unknown: "${cmd}"\nUsage: /marshal <status|stop|resume>`, "error");
 		},
 	});
 
 	/**
-	 * /ralph-stop
+	 * /marshal-stop
 	 * Pause the active loop (use when agent is idle)
 	 */
-	pi.registerCommand("ralph-stop", {
-		description: "Stop (pause) the active Ralph loop",
+	pi.registerCommand("marshal-stop", {
+		description: "Stop (pause) the active Marshal loop",
 		handler: async (_args, ctx) => {
-			if (!state.ralphLoop) { ctx.ui.notify("No active Ralph loop.", "error"); return; }
-			state.ralphLoop.status = "paused";
+			if (!state.marshalLoop) { ctx.ui.notify("No active Marshal loop.", "error"); return; }
+			state.marshalLoop.status = "paused";
 			saveState();
-			ctx.ui.notify(`Stopped loop "${state.ralphLoop.name}".`, "info");
+			ctx.ui.notify(`Stopped loop "${state.marshalLoop.name}".`, "info");
 		},
 	});
 
 	// ── Helpers ───────────────────────────────────────────────────────────────
 
-	function buildRalphPrompt(loop: RalphLoop, taskContent: string): string {
+	function buildMarshalPrompt(loop: MarshalLoop, taskContent: string): string {
 		const divider = "─".repeat(71);
 		const iterLabel = `Iteration ${loop.iteration + 1}/${loop.maxIterations}`;
 		const itemsHint = loop.itemsPerIteration > 0
-			? `**THIS ITERATION: Process approximately ${loop.itemsPerIteration} items, then call ralph_done.**`
-			: `**Work on the next items from your checklist, then call ralph_done.**`;
+			? `**THIS ITERATION: Process approximately ${loop.itemsPerIteration} items, then call marshal_done.**`
+			: `**Work on the next items from your checklist, then call marshal_done.**`;
 		const reflectHint = loop.reflectEvery > 0 && loop.iteration > 0 && loop.iteration % loop.reflectEvery === 0
 			? `\n\n**REFLECTION POINT** (every ${loop.reflectEvery} iterations): Assess progress before continuing.\n`
 			: "";
 
 		return [
 			divider,
-			`\ud83d\udd04 RALPH LOOP: ${loop.name} | ${iterLabel}`,
+			`\ud83d\udd04 MARSHAL LOOP: ${loop.name} | ${iterLabel}`,
 			divider,
 			"",
-			`## Current Task (from .ralph/${loop.name}.md)`,
+			`## Current Task (from .marshal/${loop.name}.md)`,
 			"",
 			taskContent,
 			"",
@@ -1003,16 +1003,16 @@ export default function (pi: ExtensionAPI) {
 			"",
 			"## Instructions",
 			"",
-			`User controls: ESC pauses the assistant. Send a message to resume. Run /ralph-stop when idle to stop the loop.`,
+			`User controls: ESC pauses the assistant. Send a message to resume. Run /marshal-stop when idle to stop the loop.`,
 			"",
-			`You are in a Ralph loop (${iterLabel}).${reflectHint}`,
+			`You are in a Marshal loop (${iterLabel}).${reflectHint}`,
 			"",
 			itemsHint,
 			"",
 			`1. Work on the next items from your checklist`,
-			`2. Update the task file (.ralph/${loop.name}.md) with your progress`,
+			`2. Update the task file (.marshal/${loop.name}.md) with your progress`,
 			`3. When FULLY COMPLETE, respond with: <promise>COMPLETE</promise>`,
-			`4. Otherwise, call the \`ralph_done\` tool to proceed to next iteration`,
+			`4. Otherwise, call the \`marshal_done\` tool to proceed to next iteration`,
 		].join("\n");
 	}
 
@@ -1397,10 +1397,10 @@ export default function (pi: ExtensionAPI) {
 			}
 
 			const entry = JSON.stringify({
-				seq: _logSeq++,
+				...data,
+				seq: _logSeq++,        // always wins — monotonic counter
 				timestamp: new Date().toISOString(),
-				...data,           // caller data first (lower priority)
-				type,              // base fields always win and cannot be overridden by callers
+				type,                  // base fields always override caller data
 				agent: state.current,
 				workflow: state.workflow,
 			});

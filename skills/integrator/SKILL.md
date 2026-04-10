@@ -4,7 +4,7 @@ description: Combine les sorties de codegen et tests, résout les conflits, appl
 license: MIT
 metadata:
   author: openspec
-  version: "1.0.0"
+  version: "1.1.0"
 ---
 
 # Integrator Agent

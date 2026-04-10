@@ -23,7 +23,7 @@ Versioning: [Semantic Versioning](https://semver.org/)
 - `context-log.jsonl` append-only logging for all agent transitions
 
 #### Skills
-- `orchestrator` — Strategic coordinator, plan 40%/work 10%/review 40%/compound 10%, Ralph integration
+- `orchestrator` — Strategic coordinator, plan 40%/work 10%/review 40%/compound 10%, Marshal integration
 - `codegen` — FC&IS production code generator (Web/Android/iOS/Rust/KMP)
 - `designer` — UI/Atomic Design decomposition from maquettes
 - `tests` — TDD (Chicago + London school), testing pyramid

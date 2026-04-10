@@ -4,7 +4,7 @@ description: Génère du code de production suivant FC&IS (Functional Core & Imp
 license: MIT
 metadata:
   author: openspec
-  version: "1.0.0"
+  version: "1.1.0"
 ---
 
 # CodeGen Agent

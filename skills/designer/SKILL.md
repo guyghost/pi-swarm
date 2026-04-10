@@ -4,7 +4,7 @@ description: Analyse les images UI/maquettes, décompose selon l'Atomic Design (
 license: MIT
 metadata:
   author: openspec
-  version: "1.0.0"
+  version: "1.1.0"
 ---
 
 # Designer Agent

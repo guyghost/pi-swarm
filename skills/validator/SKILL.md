@@ -4,7 +4,7 @@ description: Vérifie la conformité FC&IS (Functional Core & Imperative Shell),
 license: MIT
 metadata:
   author: openspec
-  version: "1.0.0"
+  version: "1.1.0"
 ---
 
 # Validator Agent

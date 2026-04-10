@@ -4,7 +4,7 @@ description: Crée des tests (unit, component, integration, E2E) en TDD. Écrit 
 license: MIT
 metadata:
   author: openspec
-  version: "1.0.0"
+  version: "1.1.0"
 ---
 
 # Tests Agent
