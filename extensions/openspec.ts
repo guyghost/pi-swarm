@@ -8,8 +8,9 @@
  *   - Agent persona injection into system prompt via before_agent_start
  *   - Footer status showing current agent + workflow step
  *   - /agent <name|status|reset> command
- *   - /flow <standard|tdd|review|status> command
+ *   - /flow <standard|ui|tdd|review|status> command
  *   - /flow-next to advance workflow step
+ *   - /swarm dashboard command (agent swarm command center)
  *   - /skill:agent-name interception for automatic tracking
  *   - context-log.jsonl append-only logging
  *
@@ -18,6 +19,7 @@
  *
  * Workflows:
  *   standard: orchestrator → codegen → tests → integrator → validator → review
+ *   ui:       orchestrator → designer → codegen → tests → integrator → validator → review
  *   tdd:      tests → codegen → integrator → validator → review
  *   review:   validator → review
  */
@@ -25,6 +27,9 @@
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { appendFileSync, mkdirSync, existsSync } from "node:fs";
 import { join, dirname } from "node:path";
+
+// Monotonic counter for context-log entries (resets per process; timestamp handles cross-session ordering)
+let _logSeq = 0;
 
 // ─── Agent Definitions ────────────────────────────────────────────────────────
 
@@ -39,6 +44,17 @@ const AGENT_ROLES = {
 	sophos: { emoji: "🦉", label: "Sophos", color: "muted" as const },
 } as const;
 
+const AGENT_BLURBS = {
+	orchestrator: "Plans and coordinates the full pipeline",
+	codegen: "Implements production code with FC&IS",
+	designer: "Shapes UI direction and visual system",
+	tests: "Drives TDD and regression safety",
+	integrator: "Merges outputs and tidies structure",
+	validator: "Checks architecture and constraints",
+	review: "Delivers final APPROVED or fixes verdict",
+	sophos: "Provides second-opinion and risk analysis",
+} as const;
+
 type AgentName = keyof typeof AGENT_ROLES;
 
 const AGENT_NAMES = Object.keys(AGENT_ROLES) as AgentName[];
@@ -47,12 +63,106 @@ const AGENT_NAMES = Object.keys(AGENT_ROLES) as AgentName[];
 
 const WORKFLOWS = {
 	standard: ["orchestrator", "codegen", "tests", "integrator", "validator", "review"] as AgentName[],
+	ui: ["orchestrator", "designer", "codegen", "tests", "integrator", "validator", "review"] as AgentName[],
 	tdd: ["tests", "codegen", "integrator", "validator", "review"] as AgentName[],
 	review: ["validator", "review"] as AgentName[],
 } as const;
 
 type WorkflowName = keyof typeof WORKFLOWS;
 const WORKFLOW_NAMES = Object.keys(WORKFLOWS) as WorkflowName[];
+
+type SwarmTheme = "kimi" | "blueprint" | "minimal" | "hangar";
+
+interface ThemeTokens {
+	name: SwarmTheme;
+	label: string;
+	border: string;
+	divider: string;
+	sectionOpen: string;
+	sectionClose: string;
+	progressFill: string;
+	progressHead: string;
+	progressEmpty: string;
+	cardTopLeft: string;
+	cardTopRight: string;
+	cardBottomLeft: string;
+	cardBottomRight: string;
+	cardHorizontal: string;
+	cardVertical: string;
+}
+
+const SWARM_THEMES: Record<SwarmTheme, ThemeTokens> = {
+	kimi: {
+		name: "kimi",
+		label: "Kimi Cards",
+		border: "=",
+		divider: "-",
+		sectionOpen: "[",
+		sectionClose: "]",
+		progressFill: "#",
+		progressHead: ">",
+		progressEmpty: ".",
+		cardTopLeft: "+",
+		cardTopRight: "+",
+		cardBottomLeft: "+",
+		cardBottomRight: "+",
+		cardHorizontal: "-",
+		cardVertical: "|",
+	},
+	blueprint: {
+		name: "blueprint",
+		label: "Blueprint",
+		border: "~",
+		divider: "·",
+		sectionOpen: "<",
+		sectionClose: ">",
+		progressFill: "=",
+		progressHead: ">",
+		progressEmpty: " ",
+		cardTopLeft: "/",
+		cardTopRight: "\\",
+		cardBottomLeft: "\\",
+		cardBottomRight: "/",
+		cardHorizontal: "=",
+		cardVertical: "!",
+	},
+	minimal: {
+		name: "minimal",
+		label: "Minimal",
+		border: "-",
+		divider: "-",
+		sectionOpen: "(",
+		sectionClose: ")",
+		progressFill: "=",
+		progressHead: ">",
+		progressEmpty: ".",
+		cardTopLeft: "+",
+		cardTopRight: "+",
+		cardBottomLeft: "+",
+		cardBottomRight: "+",
+		cardHorizontal: "-",
+		cardVertical: "|",
+	},
+	hangar: {
+		name: "hangar",
+		label: "Hanging Cards V3",
+		border: "#",
+		divider: "=",
+		sectionOpen: "[",
+		sectionClose: "]",
+		progressFill: "=",
+		progressHead: ">",
+		progressEmpty: ".",
+		cardTopLeft: "+",
+		cardTopRight: "+",
+		cardBottomLeft: "+",
+		cardBottomRight: "+",
+		cardHorizontal: "-",
+		cardVertical: "|",
+	},
+};
+
+const SWARM_THEME_NAMES = Object.keys(SWARM_THEMES) as SwarmTheme[];
 
 // ─── State ────────────────────────────────────────────────────────────────────
 
@@ -66,6 +176,7 @@ interface AgentState {
 	history: HistoryEntry[];
 	workflow: WorkflowName | null;
 	workflowStep: number;
+	theme: SwarmTheme;
 }
 
 const CUSTOM_TYPE = "openspec-agent-state";
@@ -78,13 +189,14 @@ export default function (pi: ExtensionAPI) {
 		history: [],
 		workflow: null,
 		workflowStep: 0,
+		theme: "kimi",
 	};
 
 	// ── Session State ──────────────────────────────────────────────────────────
 
 	// Restore state from session entries on startup or session switch
 	pi.on("session_start", async (_event, ctx) => {
-		state = { current: null, history: [], workflow: null, workflowStep: 0 };
+		state = { current: null, history: [], workflow: null, workflowStep: 0, theme: "kimi" };
 
 		for (const entry of ctx.sessionManager.getBranch()) {
 			if (entry.type === "custom" && entry.customType === CUSTOM_TYPE && entry.data) {
@@ -92,6 +204,8 @@ export default function (pi: ExtensionAPI) {
 				state = { ...state, ...(entry.data as Partial<AgentState>) };
 			}
 		}
+
+		state.theme = normalizeTheme(state.theme);
 
 		updateStatus(ctx);
 	});
@@ -172,7 +286,7 @@ export default function (pi: ExtensionAPI) {
 				state.current = null;
 				state.workflow = null;
 				state.workflowStep = 0;
-				saveState(ctx);
+				saveState();
 				updateStatus(ctx);
 				ctx.ui.notify(prev ? `Agent ${prev} deactivated` : "No active agent", "info");
 				return;
@@ -208,7 +322,7 @@ export default function (pi: ExtensionAPI) {
 						...WORKFLOW_NAMES.map((wf) => {
 							const steps = WORKFLOWS[wf];
 							const stepsStr = steps.map((s) => `${AGENT_ROLES[s].emoji} ${s}`).join(" → ");
-							return `  • /flow:${wf}  ${stepsStr}`;
+							return `  • /flow ${wf}  ${stepsStr}`;
 						}),
 					];
 					ctx.ui.notify(lines.join("\n"), "info");
@@ -220,7 +334,7 @@ export default function (pi: ExtensionAPI) {
 
 			if (!isWorkflowName(name)) {
 				ctx.ui.notify(
-					`Unknown workflow: "${name}"\nAvailable: ${WORKFLOW_NAMES.join(", ")}\n\nUsage: /flow <${WORKFLOW_NAMES.join("|")}>`,
+					`Unknown workflow: "${name}"\nAvailable: ${WORKFLOW_NAMES.join(", ")}\n\nUsage: /flow <${WORKFLOW_NAMES.join("|")}> (use a space, not a colon)`,
 					"error",
 				);
 				return;
@@ -234,7 +348,7 @@ export default function (pi: ExtensionAPI) {
 			const firstAgent = steps[0];
 
 			activateAgent(firstAgent, ctx);
-			saveState(ctx);
+			saveState();
 
 			const stepsStr = steps.map((s, i) => `  ${i + 1}. ${AGENT_ROLES[s].emoji} @${s}`).join("\n");
 
@@ -255,7 +369,7 @@ export default function (pi: ExtensionAPI) {
 		description: "Advance to the next step in the active workflow",
 		handler: async (_args, ctx) => {
 			if (!state.workflow) {
-				ctx.ui.notify('No active workflow.\n\nStart one with: /flow <standard|tdd|review>', "error");
+				ctx.ui.notify(`No active workflow.\n\nStart one with: /flow <${WORKFLOW_NAMES.join("|")}>`, "error");
 				return;
 			}
 
@@ -267,7 +381,7 @@ export default function (pi: ExtensionAPI) {
 				const completedWorkflow = state.workflow;
 				state.workflow = null;
 				state.workflowStep = 0;
-				saveState(ctx);
+				saveState();
 				updateStatus(ctx);
 				ctx.ui.notify(`🎉 ${completedWorkflow.toUpperCase()} workflow complete!\n\nAll agents have finished.`, "success");
 				return;
@@ -279,7 +393,7 @@ export default function (pi: ExtensionAPI) {
 			const remaining = steps.length - state.workflowStep - 1;
 
 			activateAgent(nextAgent, ctx);
-			saveState(ctx);
+			saveState();
 
 			const remainingStr =
 				remaining > 0
@@ -300,6 +414,81 @@ export default function (pi: ExtensionAPI) {
 		},
 	});
 
+	/**
+	 * /swarm [show|compact|theme|themes|help]
+	 * Dashboard for the agent swarm
+	 */
+	pi.registerCommand("swarm", {
+		description: "Show Agent Swarm dashboard: /swarm [show|compact|theme|themes|help]",
+		handler: async (args, ctx) => {
+			const [cmd, value] = args.trim().split(/\s+/, 2);
+
+			if (!cmd || cmd === "show") {
+				showSwarmDashboard(ctx);
+				return;
+			}
+
+			if (cmd === "compact") {
+				const line = buildCompactSwarmLine();
+				ctx.ui.notify(line, "info");
+				return;
+			}
+
+			if (cmd === "help") {
+				const themeHint = SWARM_THEME_NAMES.join("|");
+				ctx.ui.notify(
+					[
+						"Agent Swarm Dashboard",
+						"",
+						"Commands:",
+						"  /swarm            Show full dashboard",
+						"  /swarm compact    Show single-line status",
+						"  /swarm themes     List available themes",
+						`  /swarm theme x    Set theme (${themeHint})`,
+						"  /swarm help       Show this help",
+						"",
+						`Current theme: ${state.theme}`,
+						"Tip: /agent status also opens the full dashboard.",
+					].join("\n"),
+					"info",
+				);
+				return;
+			}
+
+			if (cmd === "themes") {
+				const list = SWARM_THEME_NAMES.map((name) => {
+					const marker = state.theme === name ? "*" : " ";
+					return `${marker} ${name.padEnd(10)} ${SWARM_THEMES[name].label}`;
+				});
+				ctx.ui.notify(["Swarm themes:", "", ...list, "", "Use: /swarm theme <name>"].join("\n"), "info");
+				return;
+			}
+
+			if (cmd === "theme") {
+				if (!value) {
+					ctx.ui.notify(
+						`Current theme: ${state.theme}\nAvailable: ${SWARM_THEME_NAMES.join(", ")}\nUse: /swarm theme <name>`,
+						"info",
+					);
+					return;
+				}
+
+				if (!isSwarmTheme(value)) {
+					ctx.ui.notify(`Unknown theme: "${value}"\nAvailable: ${SWARM_THEME_NAMES.join(", ")}`, "error");
+					return;
+				}
+
+				state.theme = value;
+				saveState();
+				ctx.ui.notify(`Theme switched to ${value} (${SWARM_THEMES[value].label})`, "success");
+				showSwarmDashboard(ctx);
+				return;
+			}
+
+			ctx.ui.notify('Unknown option: "' + cmd + '"\nUse: /swarm [show|compact|theme|themes|help]', "error");
+		},
+	});
+
 	// ── Helpers ───────────────────────────────────────────────────────────────
 
 	function isAgentName(name: string): name is AgentName {
@@ -308,6 +497,15 @@ export default function (pi: ExtensionAPI) {
 
 	function isWorkflowName(name: string): name is WorkflowName {
 		return WORKFLOW_NAMES.includes(name as WorkflowName);
+	}
+
+	function isSwarmTheme(name: string): name is SwarmTheme {
+		return SWARM_THEME_NAMES.includes(name as SwarmTheme);
+	}
+
+	function normalizeTheme(theme: unknown): SwarmTheme {
+		if (typeof theme === "string" && isSwarmTheme(theme)) return theme;
+		return "kimi";
 	}
 
 	function activateAgent(name: AgentName, ctx: ExtensionContext) {
@@ -320,7 +518,7 @@ export default function (pi: ExtensionAPI) {
 			state.history = state.history.slice(-50);
 		}
 
-		saveState(ctx);
+		saveState();
 		updateStatus(ctx);
 		logContextEntry(ctx, "agent_switch", { from: prev, to: name });
 	}
@@ -345,50 +543,285 @@ export default function (pi: ExtensionAPI) {
 	}
 
 	function showStatus(ctx: ExtensionContext) {
-		const lines: string[] = [];
+		showSwarmDashboard(ctx);
+	}
 
-		// Active agent
-		if (state.current) {
-			const role = AGENT_ROLES[state.current];
-			lines.push(`Active: ${role.emoji} ${role.label}`);
-		} else {
-			lines.push("No active agent");
+	function showSwarmDashboard(ctx: ExtensionContext) {
+		const panel = renderSwarmDashboard();
+		ctx.ui.notify(panel, "info");
+	}
+
+	function renderSwarmDashboard() {
+		if (state.theme === "hangar") {
+			return renderHangarSwarmDashboard();
 		}
 
-		// Workflow
+		const lines: string[] = [];
+		const width = 100;
+		const theme = SWARM_THEMES[normalizeTheme(state.theme)];
+
+		const border = theme.border.repeat(width);
+		const divider = theme.divider.repeat(width);
+
+		lines.push(border);
+		lines.push(centerText("AGENT SWARM V2", width));
+		lines.push(centerText("Agent Swarm Command Theatre", width));
+		lines.push(centerText(`Theme: ${theme.name} (${theme.label})`, width));
+		lines.push(border);
+		lines.push(sectionTitle("CONTROL", theme));
+
+		if (state.current) {
+			const role = AGENT_ROLES[state.current];
+			const blurb = AGENT_BLURBS[state.current];
+			lines.push(`Lead agent : ${role.emoji} ${role.label} (@${state.current})`);
+			lines.push(`Objective  : ${blurb}`);
+		} else {
+			lines.push("Lead agent : none");
+			lines.push("Objective  : select an agent with /agent <name> or /flow <name>");
+		}
+		lines.push(`Signal     : ${state.workflow ? "workflow locked" : "standby"}`);
+
+		lines.push(divider);
+		lines.push(sectionTitle("WORKFLOW", theme));
+
 		if (state.workflow && state.workflow in WORKFLOWS) {
 			const steps = WORKFLOWS[state.workflow];
 			const current = steps[state.workflowStep];
 			const next = steps[state.workflowStep + 1];
-			lines.push(`Workflow: ${state.workflow} — Step ${state.workflowStep + 1}/${steps.length}`);
-			lines.push(`Current: @${current}`);
-			if (next) lines.push(`Next: @${next} (use /flow-next)`);
-			else lines.push("Last step (use /flow-next to complete)");
+
+			lines.push(`Mode       : ${state.workflow.toUpperCase()} (${state.workflowStep + 1}/${steps.length})`);
+			lines.push(`Progress   : ${renderWorkflowProgressBar(steps, state.workflowStep, 34, theme)} ${state.workflowStep + 1}/${steps.length}`);
+			lines.push(`Route      : ${renderWorkflowPath(steps, state.workflowStep)}`);
+			lines.push(`Current    : @${current}`);
+			lines.push(next ? `Next       : @${next} (run /flow-next)` : "Next       : final step (run /flow-next to complete)");
 		} else {
-			lines.push("No active workflow");
+			lines.push("Mode       : none");
+			lines.push("Progress   : [..................................] 0/0");
+			lines.push("Route      : start with /flow standard | /flow ui | /flow tdd | /flow review");
 		}
 
-		// Recent history
+		lines.push(divider);
+		lines.push(sectionTitle("AGENT CARDS", theme));
+		lines.push(...renderAgentGrid(2, theme));
+
 		if (state.history.length > 0) {
-			const recent = state.history.slice(-4).reverse();
-			const historyStr = recent.map((h) => `@${h.agent}`).join(" ← ");
-			lines.push(`History: ${historyStr}`);
+			lines.push(divider);
+			lines.push(sectionTitle("TIMELINE", theme));
+			const recent = state.history.slice(-6).reverse();
+			for (let i = 0; i < recent.length; i++) {
+				const h = recent[i];
+				const t = h.timestamp.slice(11, 19);
+				const pos = i === 0 ? "latest" : `t-${i}`;
+				lines.push(`  ${pos.padEnd(7)} ${t}  @${h.agent}`);
+			}
 		}
 
-		// Commands
-		lines.push("\nCommands:");
-		lines.push("  /agent <name|status|reset|list>");
-		lines.push("  /flow <standard|tdd|review|status>");
-		lines.push("  /flow-next");
+		lines.push(divider);
+		lines.push(sectionTitle("QUICK ACTIONS", theme));
+		lines.push("  /agent list | /agent <name> | /agent reset");
+		lines.push("  /flow <standard|ui|tdd|review> | /flow-next");
+		lines.push(`  /swarm theme <${SWARM_THEME_NAMES.join("|")}> | /swarm themes`);
+		lines.push("  /swarm compact");
+		lines.push(border);
 
-		ctx.ui.notify(lines.join("\n"), "info");
+		return lines.join("\n");
 	}
 
-	function saveState(ctx: ExtensionContext) {
+	function renderHangarSwarmDashboard() {
+		const lines: string[] = [];
+		const width = 118;
+		const theme = SWARM_THEMES.hangar;
+		const border = theme.border.repeat(width);
+		const divider = theme.divider.repeat(width);
+
+		lines.push(border);
+		lines.push(centerText("AGENT SWARM V3", width));
+		lines.push(centerText("Create Subagent | Hanging Cards Command Deck", width));
+		lines.push(centerText("Theme: hangar (Kimi-inspired)", width));
+		lines.push(border);
+		lines.push(centerPill("[ Create Subagent ]   [ Role: " + getLeadAgentName() + " ]", width));
+		lines.push(divider);
+		lines.push(...renderHangingAgentGrid(4, theme));
+		lines.push(divider);
+
+		if (state.workflow && state.workflow in WORKFLOWS) {
+			const steps = WORKFLOWS[state.workflow];
+			lines.push(`Workflow : ${state.workflow.toUpperCase()} ${state.workflowStep + 1}/${steps.length}`);
+			lines.push(`Progress : ${renderWorkflowProgressBar(steps, state.workflowStep, 42, theme)}`);
+			lines.push(`Route    : ${renderWorkflowPath(steps, state.workflowStep)}`);
+		} else {
+			lines.push("Workflow : none");
+			lines.push("Progress : [..........................................]");
+			lines.push("Route    : /flow standard | /flow ui | /flow tdd | /flow review");
+		}
+
+		if (state.history.length > 0) {
+			const recent = state.history.slice(-4).reverse();
+			lines.push(`Recent   : ${recent.map((h) => `@${h.agent}`).join(" <- ")}`);
+		}
+
+		lines.push(divider);
+		lines.push(`Commands : /swarm theme <${SWARM_THEME_NAMES.join("|")}> | /swarm compact | /flow-next`);
+		lines.push(border);
+
+		return lines.join("\n");
+	}
+
+	function renderHangingAgentGrid(columns: number, theme: ThemeTokens) {
+		const cards = AGENT_NAMES.map((name) => renderHangingAgentCard(name, theme));
+		const out: string[] = [];
+
+		for (let i = 0; i < cards.length; i += columns) {
+			const row = cards.slice(i, i + columns);
+			const rowHeight = row[0].length;
+			for (let line = 0; line < rowHeight; line++) {
+				out.push(row.map((card) => card[line]).join("  "));
+			}
+		}
+
+		return out;
+	}
+
+	function renderHangingAgentCard(name: AgentName, theme: ThemeTokens) {
+		const inner = 24;
+		const role = AGENT_ROLES[name];
+		const active = state.current === name;
+		const flow = getAgentFlowState(name);
+		const blurb = truncate(AGENT_BLURBS[name], inner - 2);
+
+		const stem = " ".repeat(Math.floor(inner / 2)) + "|" + " ".repeat(Math.ceil(inner / 2) - 1);
+		const hook = " ".repeat(Math.floor(inner / 2) - 1) + "(_ )" + " ".repeat(Math.ceil(inner / 2) - 2);
+		const top = `${theme.cardTopLeft}${theme.cardHorizontal.repeat(inner)}${theme.cardTopRight}`;
+		const l1 = cardLine(`${active ? "*" : " "} ${role.emoji} ${name}`, inner, theme);
+		const l2 = cardLine(role.label, inner, theme);
+		const l3 = cardLine(blurb, inner, theme);
+		const l4 = cardLine(`state: ${active ? "ACTIVE" : "IDLE"} | ${flow}`, inner, theme);
+		const l5 = cardLine("KIMI", inner, theme);
+		const bottom = `${theme.cardBottomLeft}${theme.cardHorizontal.repeat(inner)}${theme.cardBottomRight}`;
+
+		return [stem, hook, top, l1, l2, l3, l4, l5, bottom];
+	}
+
+	function getLeadAgentName() {
+		if (!state.current) return "none";
+		return state.current;
+	}
+
+	function centerPill(text: string, width: number) {
+		return centerText(text, width);
+	}
+
+	function renderWorkflowPath(steps: AgentName[], currentIndex: number) {
+		return steps
+			.map((step, idx) => {
+				if (idx < currentIndex) return `@${step}`;
+				if (idx === currentIndex) return `[${step}]`;
+				return step;
+			})
+			.join(" -> ");
+	}
+
+	function renderWorkflowProgressBar(steps: AgentName[], currentIndex: number, size: number, theme: ThemeTokens) {
+		const total = steps.length;
+		if (total <= 0) return `[${theme.progressEmpty.repeat(size)}]`;
+
+		const ratio = Math.max(0, Math.min(1, (currentIndex + 1) / total));
+		const filled = Math.round(size * ratio);
+		const headIndex = Math.max(0, Math.min(size - 1, filled - 1));
+
+		let body = "";
+		for (let i = 0; i < size; i++) {
+			if (i < headIndex) body += theme.progressFill;
+			else if (i === headIndex) body += theme.progressHead;
+			else body += theme.progressEmpty;
+		}
+
+		return `[${body}]`;
+	}
+
+	function renderAgentGrid(columns: number, theme: ThemeTokens) {
+		const cells = AGENT_NAMES.map((name) => renderAgentCard(name, theme));
+		const gridLines: string[] = [];
+
+		for (let i = 0; i < cells.length; i += columns) {
+			const row = cells.slice(i, i + columns);
+			const height = row[0].length;
+
+			for (let line = 0; line < height; line++) {
+				const content = row.map((cell) => cell[line]).join("  ");
+				gridLines.push(content);
+			}
+		}
+
+		return gridLines;
+	}
+
+	function renderAgentCard(name: AgentName, theme: ThemeTokens) {
+		const inner = 46;
+		const role = AGENT_ROLES[name];
+		const active = state.current === name;
+		const status = active ? "ACTIVE" : "IDLE";
+		const flowState = getAgentFlowState(name);
+		const blurb = AGENT_BLURBS[name];
+
+		const top = `${theme.cardTopLeft}${theme.cardHorizontal.repeat(inner)}${theme.cardTopRight}`;
+		const l1 = cardLine(`${active ? "*" : " "} ${role.emoji} @${name.toUpperCase()}  ${status}`, inner, theme);
+		const l2 = cardLine(`${role.label} | flow: ${flowState}`, inner, theme);
+		const l3 = cardLine(blurb, inner, theme);
+		const bottom = `${theme.cardBottomLeft}${theme.cardHorizontal.repeat(inner)}${theme.cardBottomRight}`;
+
+		return [top, l1, l2, l3, bottom];
+	}
+
+	function getAgentFlowState(name: AgentName) {
+		if (!state.workflow || !(state.workflow in WORKFLOWS)) return "standby";
+		const steps = WORKFLOWS[state.workflow];
+		const idx = steps.indexOf(name);
+		if (idx === -1) return "offline";
+		if (idx < state.workflowStep) return "done";
+		if (idx === state.workflowStep) return "now";
+		if (idx === state.workflowStep + 1) return "next";
+		return "queued";
+	}
+
+	function cardLine(text: string, inner: number, theme: ThemeTokens) {
+		return `${theme.cardVertical} ${truncate(text, inner - 2).padEnd(inner - 2)} ${theme.cardVertical}`;
+	}
+
+	function truncate(text: string, maxLen: number) {
+		if (text.length <= maxLen) return text;
+		if (maxLen <= 3) return text.slice(0, maxLen);
+		return `${text.slice(0, maxLen - 3)}...`;
+	}
+
+	function sectionTitle(text: string, theme: ThemeTokens) {
+		return `${theme.sectionOpen} ${text} ${theme.sectionClose}`;
+	}
+
+	function centerText(text: string, width: number) {
+		if (text.length >= width) return text;
+		const left = Math.floor((width - text.length) / 2);
+		return `${" ".repeat(left)}${text}`;
+	}
+
+	function buildCompactSwarmLine() {
+		const agent = state.current ? `@${state.current}` : "none";
+		if (!state.workflow || !(state.workflow in WORKFLOWS)) {
+			return `Swarm | theme ${state.theme} | agent ${agent} | workflow none`;
+		}
+
+		const steps = WORKFLOWS[state.workflow];
+		const pct = Math.round(((state.workflowStep + 1) / steps.length) * 100);
+		return `Swarm | theme ${state.theme} | agent ${agent} | ${state.workflow} ${state.workflowStep + 1}/${steps.length} | ${pct}%`;
+	}
+
+	// Note: pi.appendEntry is append-only (no overwrite). Entries accumulate in the session;
+	// session_start iterates all of them and keeps the last one (most-recent-wins). Pi API constraint.
+	function saveState() {
 		try {
 			pi.appendEntry(CUSTOM_TYPE, { ...state });
 		} catch {
-			// Ignore save errors
+			// Ignore — persistence is best-effort
 		}
 	}
 
@@ -402,12 +835,12 @@ export default function (pi: ExtensionAPI) {
 			}
 
 			const entry = JSON.stringify({
-				seq: Date.now(),
+				seq: _logSeq++,
 				timestamp: new Date().toISOString(),
-				type,
+				...data,           // caller data first (lower priority)
+				type,              // base fields always win and cannot be overridden by callers
 				agent: state.current,
 				workflow: state.workflow,
-				...data,
 			});
 
 			appendFileSync(logPath, entry + "\n", "utf-8");

@@ -1,19 +1,32 @@
 {
   "name": "pi-swarm",
   "version": "0.1.0",
-  "description": "Orchestrator-Workers-Synthesizer multi-agent pipeline for Pi — port of the OpenSpec multi-agent system",
+  "description": "Orchestrator-Workers-Synthesizer multi-agent pipeline for Pi — OpenSpec pattern with 8 specialized agents, 4 workflows, and a live Agent Swarm dashboard",
   "license": "MIT",
-  "keywords": ["pi-package", "multi-agent", "openspec", "orchestrator"],
+  "keywords": [
+    "pi-package",
+    "multi-agent",
+    "openspec",
+    "orchestrator",
+    "swarm",
+    "fc-is",
+    "tdd",
+    "codegen"
+  ],
   "repository": {
     "type": "git",
-    "url": "git:github.com/guyghost/pi-swarm"
+    "url": "https://github.com/guyghost/pi-swarm"
   },
   "peerDependencies": {
     "@mariozechner/pi-coding-agent": "*",
     "@mariozechner/pi-tui": "*"
   },
+  "engines": {
+    "pi": ">=0.66.0"
+  },
   "pi": {
     "extensions": ["./extensions"],
-    "skills": ["./skills"]
+    "skills": ["./skills"],
+    "image": "https://raw.githubusercontent.com/guyghost/pi-swarm/main/assets/screenshot.png"
   }
 }

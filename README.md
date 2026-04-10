@@ -1,6 +1,12 @@
 # pi-swarm
 
-> Multi-agent Orchestrator-Workers-Synthesizer pipeline for Pi — port of the OpenSpec multi-agent system.
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Pi Package](https://img.shields.io/badge/pi-package-blue)](https://shittycodingagent.ai/packages)
+[![Pi ≥ 0.66.0](https://img.shields.io/badge/pi-%3E%3D0.66.0-green)](https://github.com/badlogic/pi-mono)
+
+> Multi-agent Orchestrator-Workers-Synthesizer pipeline for Pi — OpenSpec pattern with 8 specialized agents, 4 workflows, and a live Agent Swarm dashboard.
+
+Includes a terminal dashboard for live Agent Swarm control via `/swarm`.
 
 ## Architecture
 
@@ -21,12 +27,23 @@
 ## Installation
 
 ```bash
-# Via git (global)
+# Global (toutes sessions)
 pi install git:github.com/guyghost/pi-swarm
 
-# Ou en local (pour développement)
+# Local au projet (partage équipe via .pi/settings.json)
+pi install -l git:github.com/guyghost/pi-swarm
+
+# Version pinned
+pi install git:github.com/guyghost/pi-swarm@v0.1.0
+
+# Test sans installer
+pi -e git:github.com/guyghost/pi-swarm
+
+# Développement local
 pi install ./path/to/pi-swarm
 ```
+
+Compatible Pi `>= 0.66.0`. Fonctionne avec tous les providers (Anthropic, OpenAI, Gemini...).
 
 ## Agents Disponibles
 
@@ -50,6 +67,16 @@ pi install ./path/to/pi-swarm
 ```
 
 Pipeline: `orchestrator → codegen → tests → integrator → validator → review`
+
+### UI Workflow (with designer)
+
+```
+/flow ui
+```
+
+Pipeline: `orchestrator → designer → codegen → tests → integrator → validator → review`
+
+Utilise ce workflow quand la feature implique des maquettes ou une interface visuelle.
 
 ### TDD Workflow
 
@@ -77,12 +104,33 @@ Pipeline: `validator → review`
 /agent status          # Voir l'état actuel
 /agent list            # Lister tous les agents
 /agent reset           # Désactiver l'agent courant
+
+# Dashboard Agent Swarm
+/swarm                 # Ouvrir le dashboard complet
+/swarm compact         # Résumé en une ligne
+/swarm themes          # Lister les thèmes
+/swarm theme kimi      # Thème Kimi cards
+/swarm theme blueprint # Thème blueprint
+/swarm theme minimal   # Thème minimal
+/swarm theme hangar    # Thème V3 cartes suspendues
+/swarm help            # Aide dashboard
+
+# V2: command theatre
+# - cartes agents en grille
+# - progression workflow visuelle
+# - timeline des transitions récentes
+
+# V3: hanging cards
+# - barre Create Subagent
+# - cartes suspendues des agents
+# - style Kimi en console
 ```
 
 ### Gérer les workflows
 
 ```bash
 /flow standard         # Démarrer le workflow standard
+/flow ui               # Démarrer le workflow UI (inclut designer)
 /flow tdd              # Démarrer le workflow TDD
 /flow status           # Voir l'état du workflow
 /flow-next             # Avancer au prochain step
@@ -189,6 +237,10 @@ pi-swarm/
     ├── review/SKILL.md       ← Reviewer final
     └── sophos/SKILL.md       ← Avocat du diable
 ```
+
+> **Note**: `pi.appendEntry` est append-only (pas d'overwrite possible). Les entrées de state s'accumulent
+> dans la session ; `session_start` itère toutes les entrées et garde la dernière (most-recent-wins).
+> C'est une contrainte de l'API Pi.
 
 ## Licence
 
