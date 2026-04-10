@@ -372,7 +372,7 @@ export default function (pi: ExtensionAPI) {
 			reflectEvery: Type.Optional(Type.Number({ description: "Insert a reflection checkpoint every N iterations" })),
 		}),
 		async execute(_id, params, _signal, _onUpdate, ctx) {
-			const taskFile = join(ctx.cwd, .".marshal", `${params.name}.md`);
+			const taskFile = join(ctx.cwd, ".marshal", `${params.name}.md`);
 			mkdirSync(dirname(taskFile), { recursive: true });
 			writeFileSync(taskFile, params.taskContent, "utf-8");
 
@@ -425,7 +425,7 @@ export default function (pi: ExtensionAPI) {
 			}
 
 			// Read updated task file (agent may have edited it this iteration)
-			const taskFile = join(ctx.cwd, .".marshal", `${loop.name}.md`);
+			const taskFile = join(ctx.cwd, ".marshal", `${loop.name}.md`);
 			let taskContent = "(task file not found)";
 			try { taskContent = readFileSync(taskFile, "utf-8"); } catch { /* ok */ }
 
@@ -952,7 +952,7 @@ export default function (pi: ExtensionAPI) {
 				}
 				loop.status = "running";
 				saveState();
-				const taskFile = join(ctx.cwd, .".marshal", `${loop.name}.md`);
+				const taskFile = join(ctx.cwd, ".marshal", `${loop.name}.md`);
 				let taskContent = "(task file not found)";
 				try { taskContent = readFileSync(taskFile, "utf-8"); } catch { /* ok */ }
 				pi.sendUserMessage(buildMarshalPrompt(loop, taskContent), { deliverAs: "followUp" });
