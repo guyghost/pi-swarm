@@ -169,6 +169,7 @@ const SWARM_THEME_NAMES = Object.keys(SWARM_THEMES) as SwarmTheme[];
 interface HistoryEntry {
 	agent: AgentName;
 	timestamp: string;
+	workflowStep?: number;
 }
 
 interface AgentState {
@@ -177,6 +178,12 @@ interface AgentState {
 	workflow: WorkflowName | null;
 	workflowStep: number;
 	theme: SwarmTheme;
+	// Correction loop
+	correctionCycle: number;
+	// Auto-persona: auto-inject /skill:<agent> on flow transitions
+	autoPersona: boolean;
+	// Step timing
+	stepStartedAt: string | null;
 }
 
 const CUSTOM_TYPE = "openspec-agent-state";
@@ -190,13 +197,16 @@ export default function (pi: ExtensionAPI) {
 		workflow: null,
 		workflowStep: 0,
 		theme: "kimi",
+		correctionCycle: 0,
+		autoPersona: true,
+		stepStartedAt: null,
 	};
 
 	// ── Session State ──────────────────────────────────────────────────────────
 
 	// Restore state from session entries on startup or session switch
 	pi.on("session_start", async (_event, ctx) => {
-		state = { current: null, history: [], workflow: null, workflowStep: 0, theme: "kimi" };
+		state = { current: null, history: [], workflow: null, workflowStep: 0, theme: "kimi", correctionCycle: 0, autoPersona: true, stepStartedAt: null };
 
 		for (const entry of ctx.sessionManager.getBranch()) {
 			if (entry.type === "custom" && entry.customType === CUSTOM_TYPE && entry.data) {
@@ -205,9 +215,14 @@ export default function (pi: ExtensionAPI) {
 			}
 		}
 
+		// Apply defaults for new fields (backward compat with older persisted state)
+		if (state.correctionCycle === undefined) state.correctionCycle = 0;
+		if (state.autoPersona === undefined) state.autoPersona = true;
+		if (state.stepStartedAt === undefined) state.stepStartedAt = null;
 		state.theme = normalizeTheme(state.theme);
 
 		updateStatus(ctx);
+		updateWidget(ctx);
 	});
 
 	// ── System Prompt Injection ────────────────────────────────────────────────
@@ -306,15 +321,17 @@ export default function (pi: ExtensionAPI) {
 	});
 
 	/**
-	 * /flow <standard|tdd|review|status>
-	 * Start or check a multi-agent workflow
+	 * /flow <standard|ui|tdd|review|status|back|goto|skip|restart|retry|autopersona>
+	 * Start, navigate, or inspect a multi-agent workflow
 	 */
 	pi.registerCommand("flow", {
-		description: "Start or check workflow: /flow <standard|tdd|review|status>",
+		description: "Workflow control: /flow <name|status|back|goto|skip|restart|retry|autopersona>",
 		handler: async (args, ctx) => {
-			const name = args.trim() as WorkflowName | "status" | "";
+			const [cmd, ...rest] = args.trim().split(/\s+/);
+			const value = rest.join(" ");
 
-			if (!name || name === "status") {
+			// ── status ──────────────────────────────────────────────────────────
+			if (!cmd || cmd === "status") {
 				if (!state.workflow) {
 					const lines = [
 						"No active workflow.\n",
@@ -324,6 +341,10 @@ export default function (pi: ExtensionAPI) {
 							const stepsStr = steps.map((s) => `${AGENT_ROLES[s].emoji} ${s}`).join(" → ");
 							return `  • /flow ${wf}  ${stepsStr}`;
 						}),
+						"",
+						"Navigation: /flow back | /flow goto <N|agent> | /flow skip | /flow restart",
+						"Correction: /flow retry",
+						`Auto-persona: ${state.autoPersona ? "on" : "off"} (/flow autopersona to toggle)`,
 					];
 					ctx.ui.notify(lines.join("\n"), "info");
 				} else {
@@ -332,19 +353,181 @@ export default function (pi: ExtensionAPI) {
 				return;
 			}
 
-			if (!isWorkflowName(name)) {
+			// ── back ────────────────────────────────────────────────────────────
+			if (cmd === "back") {
+				if (!state.workflow) {
+					ctx.ui.notify("No active workflow.", "error");
+					return;
+				}
+				if (state.workflowStep === 0) {
+					ctx.ui.notify("Already at step 1 — cannot go back.", "error");
+					return;
+				}
+				const steps = WORKFLOWS[state.workflow];
+				const from = steps[state.workflowStep];
+				state.workflowStep--;
+				const to = steps[state.workflowStep];
+				state.correctionCycle = 0;
+				state.stepStartedAt = new Date().toISOString();
+				activateAgent(to, ctx);
+				saveState();
+				logContextEntry(ctx, "workflow_back", { from, to, step: state.workflowStep });
+				const msg = `◀ Back to step ${state.workflowStep + 1}/${steps.length}: ${AGENT_ROLES[to].emoji} @${to}`;
+				ctx.ui.notify(msg + (state.autoPersona ? `\n\nLoading persona...` : `\n\nLoad persona: /skill:${to}`), "info");
+				if (state.autoPersona) pi.sendUserMessage(`/skill:${to}`, { deliverAs: "followUp" });
+				return;
+			}
+
+			// ── goto ────────────────────────────────────────────────────────────
+			if (cmd === "goto") {
+				if (!state.workflow) {
+					ctx.ui.notify("No active workflow.", "error");
+					return;
+				}
+				const steps = WORKFLOWS[state.workflow];
+				let targetStep = -1;
+
+				const asNum = parseInt(value, 10);
+				if (!isNaN(asNum) && asNum >= 1 && asNum <= steps.length) {
+					targetStep = asNum - 1;
+				} else if (isAgentName(value as AgentName)) {
+					targetStep = steps.indexOf(value as AgentName);
+				}
+
+				if (targetStep === -1) {
+					const hint = steps.map((s, i) => `  ${i + 1}. @${s}`).join("\n");
+					ctx.ui.notify(`Invalid target: "${value}"\n\nSteps:\n${hint}\n\nUsage: /flow goto <1-${steps.length}|agent>`, "error");
+					return;
+				}
+
+				const from = steps[state.workflowStep];
+				state.workflowStep = targetStep;
+				const to = steps[targetStep];
+				state.correctionCycle = 0;
+				state.stepStartedAt = new Date().toISOString();
+				activateAgent(to, ctx);
+				saveState();
+				logContextEntry(ctx, "workflow_goto", { from, to, step: targetStep });
 				ctx.ui.notify(
-					`Unknown workflow: "${name}"\nAvailable: ${WORKFLOW_NAMES.join(", ")}\n\nUsage: /flow <${WORKFLOW_NAMES.join("|")}> (use a space, not a colon)`,
+					`⤵ Jumped to step ${targetStep + 1}/${steps.length}: ${AGENT_ROLES[to].emoji} @${to}` +
+					(state.autoPersona ? `\n\nLoading persona...` : `\n\nLoad persona: /skill:${to}`),
+					"info",
+				);
+				if (state.autoPersona) pi.sendUserMessage(`/skill:${to}`, { deliverAs: "followUp" });
+				return;
+			}
+
+			// ── skip ────────────────────────────────────────────────────────────
+			if (cmd === "skip") {
+				if (!state.workflow) {
+					ctx.ui.notify("No active workflow.", "error");
+					return;
+				}
+				const steps = WORKFLOWS[state.workflow];
+				if (state.workflowStep >= steps.length - 1) {
+					ctx.ui.notify("Cannot skip the last step — use /flow-next to complete.", "error");
+					return;
+				}
+				const skipped = steps[state.workflowStep];
+				state.workflowStep++;
+				const next = steps[state.workflowStep];
+				state.correctionCycle = 0;
+				state.stepStartedAt = new Date().toISOString();
+				activateAgent(next, ctx);
+				saveState();
+				logContextEntry(ctx, "workflow_skip", { skipped, next, step: state.workflowStep });
+				ctx.ui.notify(
+					`⏭ Skipped @${skipped} → step ${state.workflowStep + 1}/${steps.length}: ${AGENT_ROLES[next].emoji} @${next}` +
+					(state.autoPersona ? `\n\nLoading persona...` : `\n\nLoad persona: /skill:${next}`),
+					"warning",
+				);
+				if (state.autoPersona) pi.sendUserMessage(`/skill:${next}`, { deliverAs: "followUp" });
+				return;
+			}
+
+			// ── restart ─────────────────────────────────────────────────────────
+			if (cmd === "restart") {
+				if (!state.workflow) {
+					ctx.ui.notify("No active workflow.", "error");
+					return;
+				}
+				const ok = await ctx.ui.confirm("Restart workflow?", `Reset ${state.workflow.toUpperCase()} to step 1?`);
+				if (!ok) return;
+				const steps = WORKFLOWS[state.workflow];
+				state.workflowStep = 0;
+				state.correctionCycle = 0;
+				state.stepStartedAt = new Date().toISOString();
+				activateAgent(steps[0], ctx);
+				saveState();
+				logContextEntry(ctx, "workflow_restart", { workflow: state.workflow });
+				ctx.ui.notify(
+					`🔄 Restarted ${state.workflow.toUpperCase()} from step 1: ${AGENT_ROLES[steps[0]].emoji} @${steps[0]}` +
+					(state.autoPersona ? `\n\nLoading persona...` : `\n\nLoad persona: /skill:${steps[0]}`),
+					"info",
+				);
+				if (state.autoPersona) pi.sendUserMessage(`/skill:${steps[0]}`, { deliverAs: "followUp" });
+				return;
+			}
+
+			// ── retry ────────────────────────────────────────────────────────────
+			if (cmd === "retry") {
+				if (!state.workflow) {
+					ctx.ui.notify("No active workflow.", "error");
+					return;
+				}
+				state.correctionCycle++;
+				saveState();
+				updateStatus(ctx);
+				const agent = state.current ? `@${state.current}` : "current agent";
+				logContextEntry(ctx, "workflow_retry", { agent: state.current, cycle: state.correctionCycle });
+				const sophosSuggestion = state.correctionCycle >= 2
+					? `\n\n⚠️ ${state.correctionCycle} correction cycles — consider /skill:sophos for a second opinion.`
+					: "";
+				ctx.ui.notify(
+					`🔁 Correction cycle ${state.correctionCycle} for ${agent}${sophosSuggestion}`,
+					state.correctionCycle >= 2 ? "warning" : "info",
+				);
+				return;
+			}
+
+			// ── autopersona toggle ───────────────────────────────────────────────
+			if (cmd === "autopersona") {
+				state.autoPersona = !state.autoPersona;
+				saveState();
+				ctx.ui.notify(
+					`Auto-persona ${state.autoPersona ? "✅ enabled" : "❌ disabled"}\n\n${state.autoPersona ? "Flow transitions will auto-load /skill:<agent>" : "Manual: use /skill:<agent> after each transition"}`
+					, "info"
+				);
+				return;
+			}
+
+			// ── start workflow ───────────────────────────────────────────────────
+			if (!isWorkflowName(cmd)) {
+				const navCmds = "back | goto <N|agent> | skip | restart | retry | autopersona";
+				ctx.ui.notify(
+					`Unknown: "${cmd}"\n\nWorkflows: ${WORKFLOW_NAMES.join(", ")}\nNavigation: ${navCmds}\n\nUsage: /flow <workflow|command>`,
 					"error",
 				);
 				return;
 			}
 
-			// Start the workflow
-			state.workflow = name;
-			state.workflowStep = 0;
+			// Confirm if overriding an active workflow
+			if (state.workflow && state.workflow !== cmd) {
+				const steps = WORKFLOWS[state.workflow];
+				const ok = await ctx.ui.confirm(
+					"Replace active workflow?",
+					`${state.workflow.toUpperCase()} is at step ${state.workflowStep + 1}/${steps.length} (@${state.current}). Start ${cmd.toUpperCase()} instead?`,
+				);
+				if (!ok) return;
+			}
 
-			const steps = WORKFLOWS[name];
+			// Start the workflow
+			state.workflow = cmd;
+			state.workflowStep = 0;
+			state.correctionCycle = 0;
+			state.stepStartedAt = new Date().toISOString();
+
+			const steps = WORKFLOWS[cmd];
 			const firstAgent = steps[0];
 
 			activateAgent(firstAgent, ctx);
@@ -353,13 +536,16 @@ export default function (pi: ExtensionAPI) {
 			const stepsStr = steps.map((s, i) => `  ${i + 1}. ${AGENT_ROLES[s].emoji} @${s}`).join("\n");
 
 			ctx.ui.notify(
-				`🚀 ${name.toUpperCase()} workflow started!\n\nPipeline:\n${stepsStr}\n\nCurrent: ${AGENT_ROLES[firstAgent].emoji} @${firstAgent}\n\nLoad persona with: /skill:${firstAgent}\nAdvance with: /flow-next`,
+				`🚀 ${cmd.toUpperCase()} workflow started!\n\nPipeline:\n${stepsStr}\n\nCurrent: ${AGENT_ROLES[firstAgent].emoji} @${firstAgent}\n\n` +
+				(state.autoPersona ? `Loading persona...` : `Load persona: /skill:${firstAgent}\nAdvance: /flow-next`),
 				"success",
 			);
 
-			logContextEntry(ctx, "workflow_start", { workflow: name, steps });
+			logContextEntry(ctx, "workflow_start", { workflow: cmd, steps });
+			if (state.autoPersona) pi.sendUserMessage(`/skill:${firstAgent}`, { deliverAs: "followUp" });
 		},
 	});
+
 
 	/**
 	 * /flow-next
@@ -375,14 +561,26 @@ export default function (pi: ExtensionAPI) {
 
 			const steps = WORKFLOWS[state.workflow];
 
+			// Log step duration
+			const stepDurationMs = state.stepStartedAt
+				? Date.now() - new Date(state.stepStartedAt).getTime()
+				: null;
+
 			if (state.workflowStep >= steps.length - 1) {
 				// Workflow complete
-				logContextEntry(ctx, "workflow_complete", { workflow: state.workflow });
+				logContextEntry(ctx, "workflow_complete", {
+					workflow: state.workflow,
+					stepDurationMs,
+					totalCorrectionCycles: state.correctionCycle,
+				});
 				const completedWorkflow = state.workflow;
 				state.workflow = null;
 				state.workflowStep = 0;
+				state.correctionCycle = 0;
+				state.stepStartedAt = null;
 				saveState();
 				updateStatus(ctx);
+				updateWidget(ctx);
 				ctx.ui.notify(`🎉 ${completedWorkflow.toUpperCase()} workflow complete!\n\nAll agents have finished.`, "success");
 				return;
 			}
@@ -391,6 +589,9 @@ export default function (pi: ExtensionAPI) {
 			state.workflowStep++;
 			const nextAgent = steps[state.workflowStep];
 			const remaining = steps.length - state.workflowStep - 1;
+			const prevCorrectionCycle = state.correctionCycle;
+			state.correctionCycle = 0;
+			state.stepStartedAt = new Date().toISOString();
 
 			activateAgent(nextAgent, ctx);
 			saveState();
@@ -400,8 +601,11 @@ export default function (pi: ExtensionAPI) {
 					? `\nRemaining: ${steps.slice(state.workflowStep + 1).map((s) => `@${s}`).join(" → ")}`
 					: "\n(Last step)";
 
+			const cycleInfo = prevCorrectionCycle > 0 ? ` (${prevCorrectionCycle} correction cycle${prevCorrectionCycle > 1 ? "s" : ""})` : "";
+
 			ctx.ui.notify(
-				`Step ${state.workflowStep + 1}/${steps.length}: ${AGENT_ROLES[nextAgent].emoji} @${nextAgent}\n\nPrevious: @${prevAgent} → done${remainingStr}\n\nLoad persona: /skill:${nextAgent}`,
+				`Step ${state.workflowStep + 1}/${steps.length}: ${AGENT_ROLES[nextAgent].emoji} @${nextAgent}\n\nPrevious: @${prevAgent} ✓${cycleInfo}${remainingStr}\n\n` +
+				(state.autoPersona ? `Loading persona...` : `Load persona: /skill:${nextAgent}`),
 				"info",
 			);
 
@@ -410,7 +614,11 @@ export default function (pi: ExtensionAPI) {
 				step: state.workflowStep,
 				agent: nextAgent,
 				prev: prevAgent,
+				stepDurationMs,
+				correctionCycles: prevCorrectionCycle,
 			});
+
+			if (state.autoPersona) pi.sendUserMessage(`/skill:${nextAgent}`, { deliverAs: "followUp" });
 		},
 	});
 
@@ -512,7 +720,7 @@ export default function (pi: ExtensionAPI) {
 		const prev = state.current;
 		state.current = name;
 
-		state.history.push({ agent: name, timestamp: new Date().toISOString() });
+		state.history.push({ agent: name, timestamp: new Date().toISOString(), workflowStep: state.workflowStep });
 		// Cap history to last 50 entries
 		if (state.history.length > 50) {
 			state.history = state.history.slice(-50);
@@ -520,6 +728,7 @@ export default function (pi: ExtensionAPI) {
 
 		saveState();
 		updateStatus(ctx);
+		updateWidget(ctx);
 		logContextEntry(ctx, "agent_switch", { from: prev, to: name });
 	}
 
@@ -536,10 +745,46 @@ export default function (pi: ExtensionAPI) {
 		let workflowPart = "";
 		if (state.workflow && state.workflow in WORKFLOWS) {
 			const steps = WORKFLOWS[state.workflow];
-			workflowPart = ` [${state.workflow} ${state.workflowStep + 1}/${steps.length}]`;
+			const retryPart = state.correctionCycle > 0 ? ` retry:${state.correctionCycle}` : "";
+			workflowPart = ` [${state.workflow} ${state.workflowStep + 1}/${steps.length}${retryPart}]`;
 		}
 
 		ctx.ui.setStatus("openspec", `${role.emoji} ${role.label}${workflowPart}`);
+	}
+
+	function updateWidget(ctx: ExtensionContext) {
+		if (!ctx.hasUI) return;
+
+		if (!state.workflow || !(state.workflow in WORKFLOWS)) {
+			ctx.ui.setWidget("openspec-flow", undefined);
+			return;
+		}
+
+		const steps = WORKFLOWS[state.workflow];
+		const total = steps.length;
+		const current = state.workflowStep;
+
+		// Progress bar: 20 chars wide
+		const barWidth = 20;
+		const filled = Math.round(barWidth * (current + 1) / total);
+		const bar = "#".repeat(filled) + ".".repeat(barWidth - filled);
+
+		// Steps display
+		const stepsLine = steps
+			.map((s, i) => {
+				if (i < current) return `✓${s}`;
+				if (i === current) return `[${s}]`;
+				return s;
+			})
+			.join(" → ");
+
+		const retryInfo = state.correctionCycle > 0 ? `  🔄 retry:${state.correctionCycle}` : "";
+		const autoInfo = state.autoPersona ? "" : "  [manual persona]";
+
+		ctx.ui.setWidget("openspec-flow", [
+			`${state.workflow.toUpperCase()} [${bar}] ${current + 1}/${total}${retryInfo}${autoInfo}`,
+			stepsLine,
+		]);
 	}
 
 	function showStatus(ctx: ExtensionContext) {
