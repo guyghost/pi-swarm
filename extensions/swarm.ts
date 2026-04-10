@@ -29,6 +29,7 @@ import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-age
 import { Type } from "@sinclair/typebox";
 import { appendFileSync, mkdirSync, existsSync, writeFileSync, readFileSync } from "node:fs";
 import { join, dirname } from "node:path";
+import { visibleWidth, truncateToWidth } from "@mariozechner/pi-tui";
 
 // Monotonic counter for context-log entries (resets per process; timestamp handles cross-session ordering)
 let _logSeq = 0;
@@ -45,6 +46,18 @@ const AGENT_ROLES = {
 	review: { emoji: "🔍", label: "Review", color: "warning" as const },
 	sophos: { emoji: "🦉", label: "Sophos", color: "muted" as const },
 } as const;
+
+// Tool name → human-readable action label (shown in the agent card)
+const TOOL_ACTION_LABELS: Record<string, string> = {
+	read: "Reading",
+	write: "Writing",
+	edit: "Editing",
+	bash: "Executing",
+	grep: "Searching",
+	flow_complete: "Completing step",
+	marshal_start: "Starting loop",
+	marshal_done: "Iterating",
+};
 
 const AGENT_BLURBS = {
 	orchestrator: "Plans and coordinates the full pipeline",
@@ -207,6 +220,10 @@ const CUSTOM_TYPE = "openspec-agent-state";
 // ─── Extension ────────────────────────────────────────────────────────────────
 
 export default function (pi: ExtensionAPI) {
+	// Volatile — not persisted, reset on session start
+	let _isWorking = false;
+	let _currentAction: string | null = null;
+
 	let state: AgentState = {
 		current: null,
 		history: [],
@@ -239,7 +256,33 @@ export default function (pi: ExtensionAPI) {
 		if (state.marshalLoop === undefined) state.marshalLoop = null;
 		state.theme = normalizeTheme(state.theme);
 
+		_isWorking = false;
+		_currentAction = null;
 		updateStatus(ctx);
+		updateWidget(ctx);
+	});
+
+	// ── Agent Working Indicator ───────────────────────────────────────────────
+
+	pi.on("agent_start", async (_event, ctx) => {
+		_isWorking = true;
+		_currentAction = null;
+		updateWidget(ctx);
+	});
+
+	pi.on("agent_end", async (_event, ctx) => {
+		_isWorking = false;
+		_currentAction = null;
+		updateWidget(ctx);
+	});
+
+	pi.on("tool_execution_start", async (event, ctx) => {
+		_currentAction = TOOL_ACTION_LABELS[event.toolName] ?? event.toolName;
+		updateWidget(ctx);
+	});
+
+	pi.on("tool_execution_end", async (_event, ctx) => {
+		_currentAction = null;
 		updateWidget(ctx);
 	});
 
@@ -1072,36 +1115,75 @@ export default function (pi: ExtensionAPI) {
 	function updateWidget(ctx: ExtensionContext) {
 		if (!ctx.hasUI) return;
 
-		if (!state.workflow || !(state.workflow in WORKFLOWS)) {
-			ctx.ui.setWidget("openspec-flow", undefined);
+		if (!state.current) {
+			ctx.ui.setWidget("openspec-agent", undefined);
 			return;
 		}
 
-		const steps = WORKFLOWS[state.workflow];
-		const total = steps.length;
-		const current = state.workflowStep;
+		// Snapshot volatile state for the render closure
+		const snapAgent    = state.current;
+		const snapWorkflow = state.workflow as WorkflowName | null;
+		const snapStep     = state.workflowStep;
+		const snapCycle    = state.correctionCycle;
+		const snapAction   = _currentAction;
+		const snapWorking  = _isWorking;
+		const role         = AGENT_ROLES[snapAgent];
 
-		// Progress bar: 20 chars wide
-		const barWidth = 20;
-		const filled = Math.round(barWidth * (current + 1) / total);
-		const bar = "#".repeat(filled) + ".".repeat(barWidth - filled);
+		const DOT_COLS = 12;
 
-		// Steps display
-		const stepsLine = steps
-			.map((s, i) => {
-				if (i < current) return `✓${s}`;
-				if (i === current) return `[${s}]`;
-				return s;
-			})
-			.join(" → ");
+		ctx.ui.setWidget(
+			"openspec-agent",
+			(_tui, theme) => {
+				const makeDotRow = (filled: number, total: number): string => {
+					const n = Math.round(DOT_COLS * Math.max(0, Math.min(filled / Math.max(total, 1), 1)));
+					return theme.fg("success", "●".repeat(n)) + theme.fg("dim", "·".repeat(DOT_COLS - n));
+				};
 
-		const retryInfo = state.correctionCycle > 0 ? `  🔄 retry:${state.correctionCycle}` : "";
-		const autoInfo = state.autoPersona ? "" : "  [manual persona]";
+				return {
+					render(width: number): string[] {
+						const t = theme;
+						const lines: string[] = [];
 
-		ctx.ui.setWidget("openspec-flow", [
-			`${state.workflow.toUpperCase()} [${bar}] ${current + 1}/${total}${retryInfo}${autoInfo}`,
-			stepsLine,
-		]);
+						const hasWorkflow = !!(snapWorkflow && snapWorkflow in WORKFLOWS);
+						const steps       = hasWorkflow ? WORKFLOWS[snapWorkflow!] : [];
+						const total       = steps.length;
+						const dotRow      = makeDotRow(snapStep + 1, total);
+						// visible width of one dot row + 2 trailing spaces
+						const dotRowVW    = DOT_COLS + 2;
+
+						// ── Line 1: activity + emoji + name (left)  |  step (right) ──
+						const actDot  = snapWorking ? t.fg("accent", "●") : t.fg("dim", "○");
+						const l1Left  = `  ` + actDot + `  ` + t.fg(role.color, t.bold(`${role.emoji}  ${role.label.toUpperCase()}`));
+						const stepStr = hasWorkflow ? (snapStep + 1).toString().padStart(2, "0") : "";
+						const l1Right = stepStr
+							? t.fg("muted", stepStr) + (snapCycle > 0 ? t.fg("warning", ` ×${snapCycle}`) : ``) + `  `
+							: ``;
+
+						const l1Pad = Math.max(1, width - visibleWidth(l1Left) - visibleWidth(l1Right));
+						lines.push(truncateToWidth(l1Left + " ".repeat(l1Pad) + l1Right, width));
+
+						if (hasWorkflow) {
+							// ── Line 2: └ action (left)  |  dot row 1 (right) ──────────
+							const actionLabel = snapAction ?? AGENT_BLURBS[snapAgent];
+							const l2Left      = t.fg("dim", "  └ ") + t.fg("muted", actionLabel);
+							const dotStartCol = width - dotRowVW;
+							const l2Pad       = Math.max(1, dotStartCol - visibleWidth(l2Left));
+							lines.push(truncateToWidth(l2Left + " ".repeat(l2Pad) + dotRow + `  `, width));
+
+							// ── Line 3: (empty)           |  dot row 2 (right) ──────────
+							lines.push(" ".repeat(Math.max(0, dotStartCol)) + dotRow + `  `);
+						} else {
+							// No workflow — just the blurb on line 2
+							lines.push(t.fg("dim", "  └ ") + t.fg("dim", AGENT_BLURBS[snapAgent]));
+						}
+
+						return lines;
+					},
+					invalidate() {},
+				};
+			},
+			{ placement: "belowEditor" },
+		);
 	}
 
 	function showStatus(ctx: ExtensionContext) {
