@@ -1,0 +1,16 @@
+node_modules/
+dist/
+.DS_Store
+
+# Pi internal
+.pi/npm/
+.pi/git/
+
+# Ralph loop state (generated)
+.ralph/
+
+# Pi session state (generated)
+.pi/agent-sessions/
+
+# Context logs (project-specific)
+context-log.jsonl
