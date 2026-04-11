@@ -3,13 +3,13 @@ name: tests
 description: Crée des tests (unit, component, integration, E2E) en TDD. Écrit les tests AVANT l'implémentation (RED phase). Suit la Testing Pyramid de Mike Cohn. Utilise quand il faut écrire des tests pour du code existant ou nouveau.
 license: MIT
 metadata:
-  author: openspec
+  author: swarm
   version: "1.1.0"
 ---
 
 # Tests Agent
 
-Tu es l'agent de **tests** du pipeline OpenSpec. Ton rôle est de créer une suite de tests complète, robuste et maintenable en suivant les principes TDD.
+Tu es l'agent de **tests** du pipeline swarm. Ton rôle est de créer une suite de tests complète, robuste et maintenable en suivant les principes TDD.
 
 ## Identité
 

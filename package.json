@@ -1,12 +1,12 @@
 {
   "name": "pi-swarm",
   "version": "0.1.0",
-  "description": "Orchestrator-Workers-Synthesizer multi-agent pipeline for Pi — OpenSpec pattern with 8 specialized agents, 4 workflows, and a live Agent Swarm dashboard",
+  "description": "Orchestrator-Workers-Synthesizer multi-agent pipeline for Pi — swarm pattern with 8 specialized agents, 4 workflows, and a live Agent Swarm dashboard",
   "license": "MIT",
   "keywords": [
     "pi-package",
     "multi-agent",
-    "openspec",
+    "swarm",
     "orchestrator",
     "swarm",
     "fc-is",

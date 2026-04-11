@@ -1,5 +1,5 @@
 /**
- * OpenSpec Multi-Agent Pipeline Extension for Pi
+ * Swarm Multi-Agent Pipeline Extension for Pi
  *
  * Implements the Orchestrator-Workers-Synthesizer pattern.
  *
@@ -103,7 +103,7 @@ interface AgentState {
 	marshalLoop: MarshalLoop | null;
 }
 
-const CUSTOM_TYPE = "openspec-agent-state";
+const CUSTOM_TYPE = "swarm-agent-state";
 
 // ─── Extension ────────────────────────────────────────────────────────────────
 
@@ -129,6 +129,14 @@ export default function (pi: ExtensionAPI) {
 		if (state.autoPersona === undefined) state.autoPersona = true;
 		if (state.stepStartedAt === undefined) state.stepStartedAt = null;
 		if (state.marshalLoop === undefined) state.marshalLoop = null;
+
+		// Orchestrator is the default agent — always active, decides when to trigger the swarm
+		if (!state.current) {
+			state.current = "orchestrator";
+			state.history.push({ agent: "orchestrator", timestamp: new Date().toISOString() });
+			saveState();
+		}
+
 		_isWorking = false;
 		_currentAction = null;
 		updateStatus(ctx);
@@ -147,6 +155,8 @@ export default function (pi: ExtensionAPI) {
 	pi.on("before_agent_start", async (event, _ctx) => {
 		if (!state.current) return;
 		const role = AGENT_ROLES[state.current];
+		const isOrchestratorIdle = state.current === "orchestrator" && !state.workflow;
+
 		const workflowInfo = state.workflow && state.workflow in WORKFLOWS
 			? (() => {
 					const steps = WORKFLOWS[state.workflow!];
@@ -158,7 +168,11 @@ export default function (pi: ExtensionAPI) {
 				})()
 			: "";
 
-		return { systemPrompt: event.systemPrompt + `\n\n---\n## Active Agent: ${role.emoji} ${role.label}\n\nYou are currently acting as the **${role.label}** agent in the OpenSpec multi-agent pipeline. Stay in character — follow the responsibilities and constraints of this role.${workflowInfo}\n\nTo switch agents: \`/skill:<agent>\` or \`/agent <name>\`\n---` };
+		const orchestratorBlock = isOrchestratorIdle
+			? `\n\nYou are the **hub of the swarm**. Analyze the user's request and decide:\n- **Simple task** (1 agent): delegate directly with \`/skill:<agent>\`\n- **Complex task** (pipeline): start a workflow with \`/flow <standard|ui|tdd>\` or a Marshal loop\n- **Need info**: ask questions first\n\nNever implement code yourself — plan, delegate, coordinate.`
+			: "";
+
+		return { systemPrompt: event.systemPrompt + `\n\n---\n## Active Agent: ${role.emoji} ${role.label}\n\nYou are currently acting as the **${role.label}** agent in the swarm multi-agent pipeline. Stay in character — follow the responsibilities and constraints of this role.${orchestratorBlock}${workflowInfo}\n\nTo switch agents: \`/skill:<agent>\` or \`/agent <name>\`\n---` };
 	});
 
 	// ── Shared Workflow Advance ───────────────────────────────────────────────
@@ -174,10 +188,12 @@ export default function (pi: ExtensionAPI) {
 			state.workflowStep = 0;
 			state.correctionCycle = 0;
 			state.stepStartedAt = null;
+			// Return to orchestrator after workflow completes
+			state.current = "orchestrator";
 			saveState();
 			updateStatus(ctx);
 			updateWidget(ctx);
-			return { complete: true, message: `🎉 ${completed.toUpperCase()} workflow complete! All agents have finished.${notes ? `\n\nFinal notes: ${notes}` : ""}` };
+			return { complete: true, message: `🎉 ${completed.toUpperCase()} workflow complete! All agents have finished. Returned to 🎯 Orchestrator.${notes ? `\n\nFinal notes: ${notes}` : ""}` };
 		}
 
 		const prevAgent = steps[state.workflowStep];
@@ -312,7 +328,7 @@ export default function (pi: ExtensionAPI) {
 			}
 			if (cmd === "reset") {
 				const prev = state.current;
-				state.current = null; state.workflow = null; state.workflowStep = 0;
+				state.current = "orchestrator"; state.workflow = null; state.workflowStep = 0;
 				saveState(); updateStatus(ctx);
 				ctx.ui.notify(prev ? `Agent ${prev} deactivated` : "No active agent", "info");
 				return;
@@ -559,25 +575,25 @@ export default function (pi: ExtensionAPI) {
 
 	function updateStatus(ctx: ExtensionContext) {
 		if (!ctx.hasUI) return;
-		if (!state.current) { ctx.ui.setStatus("openspec", ""); return; }
+		if (!state.current) { ctx.ui.setStatus("swarm", ""); return; }
 		const role = AGENT_ROLES[state.current];
 		let wf = "";
 		if (state.workflow && state.workflow in WORKFLOWS) {
 			const steps = WORKFLOWS[state.workflow];
 			wf = ` [${state.workflow} ${state.workflowStep + 1}/${steps.length}${state.correctionCycle > 0 ? ` retry:${state.correctionCycle}` : ""}]`;
 		}
-		ctx.ui.setStatus("openspec", `${role.emoji} ${role.label}${wf}`);
+		ctx.ui.setStatus("swarm", `${role.emoji} ${role.label}${wf}`);
 	}
 
 	function updateWidget(ctx: ExtensionContext) {
 		if (!ctx.hasUI) return;
-		if (!state.current) { ctx.ui.setWidget("openspec-agent", undefined); return; }
+		if (!state.current) { ctx.ui.setWidget("swarm-agent", undefined); return; }
 
 		const snap = { agent: state.current, workflow: state.workflow as WorkflowName | null, step: state.workflowStep, cycle: state.correctionCycle, action: _currentAction, working: _isWorking };
 		const usage = ctx.getContextUsage();
 		const ctxPct = usage ? Math.min(1, ((usage as Record<string, unknown>).tokens as number ?? 0) / ((ctx.model as Record<string, unknown>)?.contextWindow as number ?? 200000)) : 0;
 
-		ctx.ui.setWidget("openspec-agent", (_tui, t) => ({
+		ctx.ui.setWidget("swarm-agent", (_tui, t) => ({
 			render(width: number): string[] {
 				const hasWf = !!(snap.workflow && snap.workflow in WORKFLOWS);
 				const role = AGENT_ROLES[snap.agent];
