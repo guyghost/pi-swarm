@@ -11,14 +11,14 @@ Versioning: [Semantic Versioning](https://semver.org/)
 
 ### Added
 
-#### Extension (`extensions/openspec.ts`)
+#### Extension (`extensions/swarm.ts`)
 - Active agent tracking persisted in session via `pi.appendEntry`
 - Agent persona injection into system prompt on each turn (`before_agent_start`)
 - Footer status bar showing current agent + workflow step
 - `/agent <name|status|reset|list>` — manage the active agent
 - `/flow <standard|ui|tdd|review|status>` — start a multi-agent workflow
 - `/flow-next` — advance to the next workflow step
-- `/swarm [show|compact|theme|themes|help]` — Agent Swarm dashboard (4 themes: kimi, blueprint, minimal, hangar)
+- `/swarm [compact|help]` — Agent Swarm status
 - `/skill:agent-name` interception for automatic agent tracking
 - `context-log.jsonl` append-only logging for all agent transitions
 

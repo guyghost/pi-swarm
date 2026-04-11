@@ -4,9 +4,7 @@
 [![Pi Package](https://img.shields.io/badge/pi-package-blue)](https://shittycodingagent.ai/packages)
 [![Pi ≥ 0.66.0](https://img.shields.io/badge/pi-%3E%3D0.66.0-green)](https://github.com/badlogic/pi-mono)
 
-> Multi-agent Orchestrator-Workers-Synthesizer pipeline for Pi — OpenSpec pattern with 8 specialized agents, 4 workflows, and a live Agent Swarm dashboard.
-
-Includes a terminal dashboard for live Agent Swarm control via `/swarm`.
+> Multi-agent Orchestrator-Workers-Synthesizer pipeline for Pi — 8 specialized agents, 4 workflows, and a live TUI widget.
 
 ## Architecture
 
@@ -27,211 +25,124 @@ Includes a terminal dashboard for live Agent Swarm control via `/swarm`.
 ## Installation
 
 ```bash
-# Global (toutes sessions)
+# Global
 pi install git:github.com/guyghost/pi-swarm
 
-# Local au projet (partage équipe via .pi/settings.json)
+# Local (shared via .pi/settings.json)
 pi install -l git:github.com/guyghost/pi-swarm
 
-# Version pinned
-pi install git:github.com/guyghost/pi-swarm@v0.1.0
-
-# Test sans installer
+# Test without installing
 pi -e git:github.com/guyghost/pi-swarm
-
-# Développement local
-pi install ./path/to/pi-swarm
 ```
 
-Compatible Pi `>= 0.66.0`. Fonctionne avec tous les providers (Anthropic, OpenAI, Gemini...).
+Compatible with Pi `>= 0.66.0` and all providers (Anthropic, OpenAI, Gemini…).
 
-## Agents Disponibles
+## Agents
 
-| Agent | Emoji | Rôle | Invoke |
+| Agent | Emoji | Role | Invoke |
 |-------|-------|------|--------|
-| `orchestrator` | 🎯 | Planifie, délègue, coordonne | `/skill:orchestrator` |
-| `codegen` | ⚡ | Génère code de production FC&IS | `/skill:codegen` |
-| `designer` | 🎨 | Analyse UI, Atomic Design | `/skill:designer` |
-| `tests` | 🧪 | TDD, tests unitaires/intégration/E2E | `/skill:tests` |
-| `integrator` | 🔧 | Merge, tidy-first, formatting | `/skill:integrator` |
-| `validator` | ✅ | Vérifie FC&IS (read-only) | `/skill:validator` |
-| `review` | 🔍 | Verdict final APPROVED/NEEDS_FIXES/BLOCKED | `/skill:review` |
-| `sophos` | 🦉 | Second avis, avocat du diable | `/skill:sophos` |
+| `orchestrator` | 🎯 | Plans, delegates, coordinates | `/skill:orchestrator` |
+| `codegen` | ⚡ | Generates production code (FC&IS) | `/skill:codegen` |
+| `designer` | 🎨 | Analyzes UI, Atomic Design | `/skill:designer` |
+| `tests` | 🧪 | TDD, unit/integration/E2E tests | `/skill:tests` |
+| `integrator` | 🔧 | Merges, tidy-first, formatting | `/skill:integrator` |
+| `validator` | ✅ | Verifies FC&IS (read-only) | `/skill:validator` |
+| `review` | 🔍 | Final verdict: APPROVED/NEEDS_FIXES/BLOCKED | `/skill:review` |
+| `sophos` | 🦉 | Second opinion, devil's advocate | `/skill:sophos` |
 
 ## Workflows
 
-### Standard Workflow
+| Workflow | Pipeline | Start |
+|----------|----------|-------|
+| **Standard** | orchestrator → codegen → tests → integrator → validator → review | `/flow standard` |
+| **UI** | orchestrator → designer → codegen → tests → integrator → validator → review | `/flow ui` |
+| **TDD** | tests → codegen → integrator → validator → review | `/flow tdd` |
+| **Review** | validator → review | `/flow review` |
 
-```
-/flow standard
-```
+## Commands
 
-Pipeline: `orchestrator → codegen → tests → integrator → validator → review`
-
-### UI Workflow (with designer)
-
-```
-/flow ui
-```
-
-Pipeline: `orchestrator → designer → codegen → tests → integrator → validator → review`
-
-Utilise ce workflow quand la feature implique des maquettes ou une interface visuelle.
-
-### TDD Workflow
-
-```
-/flow tdd
-```
-
-Pipeline: `tests → codegen → integrator → validator → review`
-
-### Review Workflow
-
-```
-/flow review
-```
-
-Pipeline: `validator → review`
-
-## Commandes
-
-### Gérer l'agent actif
+### Agent Management
 
 ```bash
-/agent orchestrator    # Activer l'orchestrateur
-/agent codegen         # Activer codegen
-/agent status          # Voir l'état actuel
-/agent list            # Lister tous les agents
-/agent reset           # Désactiver l'agent courant
-
-# Dashboard Agent Swarm
-/swarm                 # Ouvrir le dashboard complet
-/swarm compact         # Résumé en une ligne
-/swarm themes          # Lister les thèmes
-/swarm theme kimi      # Thème Kimi cards
-/swarm theme blueprint # Thème blueprint
-/swarm theme minimal   # Thème minimal
-/swarm theme hangar    # Thème cartes suspendues
-/swarm help            # Aide dashboard
+/agent <name>       # Activate an agent
+/agent status       # Current status
+/agent list         # List all agents
+/agent reset        # Deactivate current agent
 ```
 
-### Gérer les workflows
+### Workflow Control
 
 ```bash
-/flow standard         # Démarrer le workflow standard
-/flow ui               # Démarrer le workflow UI (inclut designer)
-/flow tdd              # Démarrer le workflow TDD
-/flow status           # Voir l'état du workflow
-/flow-next             # Avancer au prochain step
+/flow <workflow>    # Start a workflow
+/flow status        # Show workflow status
+/flow-next          # Advance to next step
+/flow back          # Go back one step
+/flow goto <N>      # Jump to step N
+/flow skip          # Skip current step
+/flow restart       # Restart from step 1
+/flow retry         # Correction cycle on current agent
+/flow autopersona   # Toggle auto-persona loading
 ```
 
-## Utilisation Typique
-
-### 1. Mode Manuel (skill par skill)
+### Swarm & Marshal
 
 ```bash
-# 1. Charger l'orchestrateur pour planifier
-/skill:orchestrator
-# → "Je veux ajouter un système de notifications push..."
+/swarm              # Compact status line
+/swarm help         # Help
 
-# 2. Activer codegen pour implémenter
-/skill:codegen
-# → Implémente les modules...
-
-# 3. Activer tests pour les tests TDD
-/skill:tests
-# → Crée les tests...
-
-# 4. Intégrer
-/skill:integrator
-# → Merge, tidy-first, formatting...
-
-# 5. Valider
-/skill:validator
-# → Rapport FC&IS...
-
-# 6. Review final
-/skill:review
-# → APPROVED ✅
+/marshal status     # Marshal loop status
+/marshal stop       # Pause active loop
+/marshal resume     # Resume paused loop
 ```
 
-### 2. Mode Pipeline (automatique)
+## Usage
+
+### Manual (skill by skill)
 
 ```bash
-# Démarrer le pipeline standard
-/flow standard
-
-# Chaque agent charge son persona automatiquement
-# Quand un agent a terminé, avancer :
-/flow-next
-
-# Voir la progression
-/flow status
+/skill:orchestrator   # Plan the feature
+/skill:codegen        # Implement
+/skill:tests          # Write tests
+/skill:integrator     # Merge and tidy
+/skill:validator      # Verify architecture
+/skill:review         # Final verdict
 ```
 
-### 3. Second Avis
+### Pipeline (automatic)
 
 ```bash
-# À tout moment, demander un second avis
-/skill:sophos
-# → Analyse critique et alternatives...
+/flow standard        # Start the pipeline
+# Each agent auto-loads its persona
+# Agents call flow_complete to advance automatically
+/flow status          # Check progress
 ```
 
-## Status Bar
-
-L'extension affiche l'agent actif dans la status bar de Pi :
-```
-⚡ CodeGen [standard 2/6]
-```
-
-## Context Log
-
-Toutes les transitions d'agents sont loggées dans `context-log.jsonl` à la racine du projet :
-
-```jsonl
-{"seq":1704067200000,"timestamp":"2025-01-01T12:00:00.000Z","type":"workflow_start","agent":null,"workflow":"standard","steps":["orchestrator","codegen","tests","integrator","validator","review"]}
-{"seq":1704067200001,"timestamp":"2025-01-01T12:00:00.001Z","type":"agent_switch","agent":"orchestrator","workflow":"standard","from":null,"to":"orchestrator"}
-{"seq":1704067200002,"timestamp":"2025-01-01T12:00:01.000Z","type":"workflow_step","agent":"codegen","workflow":"standard","step":1,"agent":"codegen","prev":"orchestrator"}
-```
-
-## Principes Architecturaux
+## Key Principles
 
 - **FC&IS**: Pure functions in `core/`, side effects in `shell/`
-- **Tidy First** (Kent Beck): Séparer les changements structurels des comportementaux
+- **Tidy First** (Kent Beck): Separate structural from behavioral changes
 - **Compound Engineering**: Plan 40% → Work 10% → Review 40% → Compound 10%
-- **Context Logging**: Toutes les décisions dans `context-log.jsonl` (append-only)
-- **Correction Loop**: Max 2 itérations par agent
+- **Context Logging**: All decisions logged to `context-log.jsonl` (append-only)
+- **Correction Loop**: Max 2 iterations per agent
 
-## Compatibilité
-
-- Pi `0.66.0+`
-- Fonctionne avec tous les providers (Anthropic, OpenAI, Gemini...)
-- Skills compatibles avec d'autres harnesses (OpenCode, Claude Code) via le format standard Agent Skills
-
-## Structure du Package
+## Structure
 
 ```
 pi-swarm/
-├── package.json              ← Pi package manifest
-├── README.md
+├── package.json           # Pi package manifest
 ├── extensions/
-│   └── openspec.ts          ← Extension principale
+│   └── swarm.ts           # Main extension
 └── skills/
-    ├── orchestrator/SKILL.md ← Coordinateur
-    ├── codegen/SKILL.md      ← Générateur de code FC&IS
-    ├── designer/SKILL.md     ← Analyste UI/Atomic Design
-    ├── tests/SKILL.md        ← Agent TDD
-    ├── integrator/SKILL.md   ← Intégrateur/merger
-    ├── validator/SKILL.md    ← Validateur FC&IS (read-only)
-    ├── review/SKILL.md       ← Reviewer final
-    └── sophos/SKILL.md       ← Avocat du diable
+    ├── orchestrator/      # Coordinator
+    ├── codegen/           # Code generator (FC&IS)
+    ├── designer/          # UI/Atomic Design analyst
+    ├── tests/             # TDD agent
+    ├── integrator/        # Merger/tidier
+    ├── validator/         # Architecture verifier (read-only)
+    ├── review/            # Final reviewer
+    └── sophos/            # Devil's advocate
 ```
 
-> **Note**: `pi.appendEntry` est append-only (pas d'overwrite possible). Les entrées de state s'accumulent
-> dans la session ; `session_start` itère toutes les entrées et garde la dernière (most-recent-wins).
-> C'est une contrainte de l'API Pi.
-
-## Licence
+## License
 
 MIT
