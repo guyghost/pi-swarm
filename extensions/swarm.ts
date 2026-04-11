@@ -1128,89 +1128,127 @@ export default function (pi: ExtensionAPI) {
 		const snapAction   = _currentAction;
 		const snapWorking  = _isWorking;
 
-		const DOT_COLS = 12;
+		// Context window usage (for dot grid)
+		const usage    = ctx.getContextUsage();
+		const ctxWindow = (ctx.model as Record<string, unknown>)?.contextWindow as number ?? 200000;
+		const ctxPct   = usage ? Math.min(1, ((usage as Record<string, unknown>).tokens as number ?? 0) / ctxWindow) : 0;
+
+		const DOT_COLS   = 8;
+		const CARD_GAP   = 1;
+		const CARD_LINES = 4; // top + 2 content + bottom
 
 		ctx.ui.setWidget(
 			"openspec-agent",
 			(_tui, theme) => {
-				const makeDotRow = (filled: number, total: number): string => {
-					const n = Math.round(DOT_COLS * Math.max(0, Math.min(filled / Math.max(total, 1), 1)));
-					return theme.fg("success", "●".repeat(n)) + theme.fg("dim", "·".repeat(DOT_COLS - n));
+				const t = theme;
+
+				// Helper: build a single row of dots representing a percentage
+				const dotRow = (pct: number): string => {
+					const n = Math.round(DOT_COLS * Math.max(0, Math.min(1, pct)));
+					return t.fg("success", "●".repeat(n)) + t.fg("dim", "·".repeat(DOT_COLS - n));
+				};
+
+				// Helper: pad or truncate a styled string to exactly `w` visible chars
+				const fit = (str: string, w: number): string => {
+					const vw = visibleWidth(str);
+					if (vw > w) return truncateToWidth(str, w);
+					if (vw < w) return str + " ".repeat(w - vw);
+					return str;
 				};
 
 				return {
 					render(width: number): string[] {
-						const t = theme;
-						const lines: string[] = [];
+						const hasWf = !!(snapWorkflow && snapWorkflow in WORKFLOWS);
 
-						const hasWorkflow = !!(snapWorkflow && snapWorkflow in WORKFLOWS);
-
-						// ── No workflow: minimal 2-line badge ────────────────────────
-						if (!hasWorkflow) {
+						// ── No workflow: minimal 2-line badge ────────────────────
+						if (!hasWf) {
 							const role   = AGENT_ROLES[snapAgent];
 							const actDot = snapWorking ? t.fg("accent", "●") : t.fg("dim", "○");
-							lines.push(truncateToWidth(
-								`  ` + actDot + `  ` + t.fg(role.color, t.bold(`${role.emoji}  ${role.label.toUpperCase()}`)),
-								width,
-							));
-							lines.push(t.fg("dim", "  └ ") + t.fg("dim", AGENT_BLURBS[snapAgent]));
-							return lines;
+							return [
+								truncateToWidth(`  ` + actDot + `  ` + t.fg(role.color, t.bold(`${role.emoji}  ${role.label.toUpperCase()}`)), width),
+								t.fg("dim", "  └ ") + t.fg("dim", AGENT_BLURBS[snapAgent]),
+							];
 						}
 
-						// ── Full pipeline tree ───────────────────────────────────────
+						// ── Horizontal agent cards ────────────────────────────────
 						const steps    = WORKFLOWS[snapWorkflow!];
-						const total    = steps.length;
-						const dotRow   = makeDotRow(snapStep + 1, total);
-						const dotRowVW = DOT_COLS + 2; // dots + 2 trailing spaces
+						const numCards = steps.length;
 
-						for (let i = 0; i < steps.length; i++) {
-							const stepName = steps[i];
-							const stepRole = AGENT_ROLES[stepName];
-							const stepNum  = (i + 1).toString().padStart(2, "0");
-							const isActive = i === snapStep;
+						// Responsive card width
+						let cardW = Math.floor((width - (numCards - 1) * CARD_GAP) / numCards);
+						cardW = Math.max(20, Math.min(30, cardW));
+						const perRow = Math.max(1, Math.floor((width + CARD_GAP) / (cardW + CARD_GAP)));
+						const inner  = cardW - 2; // inside │…│
+
+						// Build each card as CARD_LINES strings
+						const cards: string[][] = steps.map((name, i) => {
+							const role     = AGENT_ROLES[name];
 							const isDone   = i < snapStep;
-							const isNext   = i === snapStep + 1;
+							const isActive = i === snapStep;
+							const stepNum  = (i + 1).toString().padStart(2, "0");
 
-							if (isDone) {
-								// ── Completed: single dim line with ✓ ───────────────────
-								const l = `  ` + t.fg("success", `✓`) + `  ` +
-									t.fg("dim", `${stepRole.emoji}  ${stepRole.label.toUpperCase()}`);
-								const r = t.fg("dim", stepNum) + `  `;
-								const pad = Math.max(1, width - visibleWidth(l) - visibleWidth(r));
-								lines.push(truncateToWidth(l + " ".repeat(pad) + r, width));
+							// Border color per state
+							const b = isActive
+								? (s: string) => t.fg(role.color, s)
+								: isDone
+									? (s: string) => t.fg("success", s)
+									: (s: string) => t.fg("dim", s);
 
-							} else if (isActive) {
-								// ── Active: 3-line card with dot grid ───────────────────
-								const actDot  = snapWorking ? t.fg("accent", "●") : t.fg("dim", "○");
-								const l1Left  = `  ` + actDot + `  ` +
-									t.fg(stepRole.color, t.bold(`${stepRole.emoji}  ${stepRole.label.toUpperCase()}`));
-								const l1Right = t.fg("muted", stepNum) +
-									(snapCycle > 0 ? t.fg("warning", ` ×${snapCycle}`) : ``) + `  `;
-								const l1Pad   = Math.max(1, width - visibleWidth(l1Left) - visibleWidth(l1Right));
-								lines.push(truncateToWidth(l1Left + " ".repeat(l1Pad) + l1Right, width));
+							const top = b("┌" + "─".repeat(inner) + "┐");
+							const bot = b("└" + "─".repeat(inner) + "┘");
 
-								const actionLabel = snapAction ?? AGENT_BLURBS[stepName];
-								const l2Left      = t.fg("dim", "  └ ") + t.fg("muted", actionLabel);
-								const dotStartCol = width - dotRowVW;
-								const l2Pad       = Math.max(1, dotStartCol - visibleWidth(l2Left));
-								lines.push(truncateToWidth(l2Left + " ".repeat(l2Pad) + dotRow + `  `, width));
-								lines.push(" ".repeat(Math.max(0, dotStartCol)) + dotRow + `  `);
+							// ── Line 1: icon + emoji + name … stepNum ──
+							const icon = isDone
+								? t.fg("success", "✓")
+								: isActive
+									? (snapWorking ? t.fg("accent", "●") : t.fg("dim", "○"))
+									: t.fg("dim", "·");
 
-							} else if (isNext) {
-								// ── Next: muted single line with › marker ───────────────
-								const l = `  ›  ` +
-									t.fg("muted", `${stepRole.emoji}  ${stepRole.label.toUpperCase()}`);
-								lines.push(truncateToWidth(l, width));
+							const nameStyled = isActive
+								? t.fg(role.color, t.bold(role.label))
+								: isDone
+									? t.fg("muted", role.label)
+									: t.fg("dim", role.label);
 
+							const l1Left  = ` ${icon} ${role.emoji} ${nameStyled}`;
+							const l1Right = (isActive ? t.fg("muted", stepNum) : t.fg("dim", stepNum))
+								+ (isActive && snapCycle > 0 ? t.fg("warning", `×${snapCycle}`) : "");
+							const l1Gap   = Math.max(1, inner - visibleWidth(l1Left) - visibleWidth(l1Right));
+							const line1   = b("│") + fit(l1Left + " ".repeat(l1Gap) + l1Right, inner) + b("│");
+
+							// ── Line 2: action + dot grid ──
+							const dots = isDone
+								? dotRow(1)          // done → full green
+								: isActive
+									? dotRow(ctxPct)  // active → context %
+									: dotRow(0);      // queued → empty
+
+							let l2Content: string;
+							if (isActive) {
+								const actionStr = snapAction ?? truncate(AGENT_BLURBS[name], inner - DOT_COLS - 4);
+								const prefix    = t.fg("dim", "└ ") + t.fg("muted", truncate(actionStr, inner - DOT_COLS - 4));
+								const l2Gap     = Math.max(1, inner - visibleWidth(prefix) - DOT_COLS);
+								l2Content = prefix + " ".repeat(l2Gap) + dots;
 							} else {
-								// ── Queued: dim single line with · marker ───────────────
-								const l = `  ·  ` +
-									t.fg("dim", `${stepRole.emoji}  ${stepRole.label}`);
-								lines.push(truncateToWidth(l, width));
+								// right-align dots
+								l2Content = " ".repeat(Math.max(0, inner - DOT_COLS)) + dots;
+							}
+							const line2 = b("│") + fit(l2Content, inner) + b("│");
+
+							return [top, line1, line2, bot];
+						});
+
+						// Merge cards horizontally, wrapping into rows
+						const gap = " ".repeat(CARD_GAP);
+						const allLines: string[] = [];
+						for (let r = 0; r < numCards; r += perRow) {
+							const rowCards = cards.slice(r, r + perRow);
+							for (let ln = 0; ln < CARD_LINES; ln++) {
+								allLines.push(rowCards.map(c => c[ln]).join(gap));
 							}
 						}
 
-						return lines;
+						return allLines;
 					},
 					invalidate() {},
 				};
